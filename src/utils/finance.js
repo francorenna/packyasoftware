@@ -68,9 +68,10 @@ const getOrderFinancialSummary = (order) => {
   }
 }
 
-const getMonthlyFinanceMovements = ({ orders, purchases, monthKey }) => {
+const getMonthlyFinanceMovements = ({ orders, purchases, expenses, monthKey }) => {
   const safeOrders = Array.isArray(orders) ? orders : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
+  const safeExpenses = Array.isArray(expenses) ? expenses : []
   const selectedMonth = monthKey || getCurrentMonthKey()
 
   const incomeMovements = safeOrders.flatMap((order, orderIndex) => {
@@ -95,6 +96,7 @@ const getMonthlyFinanceMovements = ({ orders, purchases, monthKey }) => {
           date: parsedDate.toISOString(),
           type: 'Ingreso',
           concept: `Pago pedido ${orderId}`,
+          category: '',
           amount,
         }
       })
@@ -121,12 +123,35 @@ const getMonthlyFinanceMovements = ({ orders, purchases, monthKey }) => {
         date: parsedDate.toISOString(),
         type: 'Egreso',
         concept: `Compra a ${supplierName || 'Proveedor sin nombre'}`,
+        category: 'Compras',
         amount: -totalAmount,
       }
     })
     .filter(Boolean)
 
-  return [...incomeMovements, ...expenseMovements].sort(
+  const manualExpenseMovements = safeExpenses
+    .map((expense, expenseIndex) => {
+      const date = getDateKeyFromValue(expense?.date)
+      if (!date || date.slice(0, 7) !== selectedMonth) return null
+
+      const amount = toPositiveNumber(expense?.amount)
+      if (amount <= 0) return null
+
+      const description = String(expense?.description ?? '').trim() || 'Egreso manual'
+      const category = String(expense?.category ?? '').trim()
+
+      return {
+        id: `manual-expense-${String(expense?.id ?? expenseIndex + 1)}`,
+        date,
+        type: 'Egreso',
+        concept: description,
+        category,
+        amount: -amount,
+      }
+    })
+    .filter(Boolean)
+
+  return [...incomeMovements, ...expenseMovements, ...manualExpenseMovements].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
   )
 }
@@ -207,18 +232,21 @@ const getSampleMetrics = ({ orders, purchases, products, monthKey }) => {
   }
 }
 
-const calculateFinanceSummary = ({ orders, purchases, monthKey, todayKey }) => {
+const calculateFinanceSummary = ({ orders, purchases, expenses, monthKey, todayKey }) => {
   const safeOrders = Array.isArray(orders) ? orders : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
+  const safeExpenses = Array.isArray(expenses) ? expenses : []
   const selectedMonth = monthKey || getCurrentMonthKey()
   const safeToday = todayKey || toDateKey(new Date())
 
   const totals = {
     dailyCollected: 0,
     dailyInvested: 0,
+    dailyManualExpenses: 0,
     monthlyInvoiced: 0,
     monthlyCollected: 0,
     monthlyInvested: 0,
+    monthlyManualExpenses: 0,
   }
 
   safeOrders.forEach((order) => {
@@ -257,10 +285,31 @@ const calculateFinanceSummary = ({ orders, purchases, monthKey, todayKey }) => {
     }
   })
 
+  safeExpenses.forEach((expense) => {
+    const expenseDateKey = getDateKeyFromValue(expense?.date)
+    if (!expenseDateKey) return
+
+    const amount = toPositiveNumber(expense?.amount)
+    if (amount <= 0) return
+
+    if (expenseDateKey === safeToday) {
+      totals.dailyManualExpenses += amount
+    }
+
+    if (expenseDateKey.slice(0, 7) === selectedMonth) {
+      totals.monthlyManualExpenses += amount
+    }
+  })
+
+  const dailyOutflow = totals.dailyInvested + totals.dailyManualExpenses
+  const monthlyOutflow = totals.monthlyInvested + totals.monthlyManualExpenses
+
   return {
     ...totals,
-    dailyNet: totals.dailyCollected - totals.dailyInvested,
-    monthlyNet: totals.monthlyCollected - totals.monthlyInvested,
+    dailyOutflow,
+    monthlyOutflow,
+    dailyNet: totals.dailyCollected - dailyOutflow,
+    monthlyNet: totals.monthlyCollected - totals.monthlyInvested - totals.monthlyManualExpenses,
   }
 }
 

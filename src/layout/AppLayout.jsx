@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import ClosingOverlay from '../components/ClosingOverlay'
+import SaveToast from '../components/SaveToast'
 
 const formatSavedTime = (value) => {
   const date = value instanceof Date ? value : new Date(value)
@@ -12,7 +13,15 @@ const formatSavedTime = (value) => {
   })
 }
 
-function AppLayout({ isClosing, closeMessage, saveStatus, lastSavedAt }) {
+function AppLayout({
+  isClosing,
+  closeMessage,
+  saveStatus,
+  lastSavedAt,
+  saveToastVisible,
+  saveToastToken,
+  onCloseSaveToast,
+}) {
   const statusLabel =
     saveStatus === 'saving'
       ? 'Guardando...'
@@ -38,9 +47,16 @@ function AppLayout({ isClosing, closeMessage, saveStatus, lastSavedAt }) {
           </p>
           <p className="save-indicator-time">Último guardado: {formatSavedTime(lastSavedAt)}</p>
         </aside>
+        <SaveToast
+          key={saveToastToken}
+          visible={saveToastVisible}
+          message="✔ Guardado correctamente"
+          duration={1500}
+          onClose={onCloseSaveToast}
+        />
         <Outlet />
       </main>
-      <ClosingOverlay visible={isClosing} message={closeMessage} />
+      {isClosing && <ClosingOverlay visible={isClosing} message={closeMessage} />}
     </div>
   )
 }

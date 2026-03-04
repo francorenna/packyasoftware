@@ -5,6 +5,7 @@ import ArchivedOrdersPage from './pages/ArchivedOrdersPage'
 import ClientsPage from './pages/ClientsPage'
 import DashboardPage from './pages/DashboardPage'
 import FinancePage from './pages/FinancePage'
+import ManualPurchaseListsPage from './pages/ManualPurchaseListsPage'
 import OrdersPage from './pages/OrdersPage'
 import ProductsPage from './pages/ProductsPage'
 import PurchasesPage from './pages/PurchasesPage'
@@ -12,6 +13,8 @@ import QuotesPage from './pages/QuotesPage'
 import SettingsPage from './pages/SettingsPage'
 import StockPage from './pages/StockPage'
 import useClientsState from './state/useClientsState'
+import useExpensesState from './state/useExpensesState'
+import useManualPurchaseListsState from './state/useManualPurchaseListsState'
 import useOrdersState from './state/useOrdersState'
 import useProductsState from './state/useProductsState'
 import usePurchasesState from './state/usePurchasesState'
@@ -23,9 +26,12 @@ function App() {
   const [closeMessage, setCloseMessage] = useState('🔄 Guardando datos...')
   const [saveStatus, setSaveStatus] = useState('saved')
   const [lastSavedAt, setLastSavedAt] = useState(() => new Date())
+  const [saveToastVisible, setSaveToastVisible] = useState(false)
+  const [saveToastToken, setSaveToastToken] = useState(0)
 
   const { suppliers, upsertSupplier, deleteSupplier } = useSuppliersState()
   const { clients, upsertClient, deleteClient } = useClientsState()
+  const { expenses, addExpense, deleteExpense, getMonthlyExpenses } = useExpensesState()
   const { quotes, createQuote, updateQuoteStatus, updateQuote } = useQuotesState()
   const {
     orders,
@@ -37,6 +43,7 @@ function App() {
     updateOrderClient,
     updateOrderItems,
     convertSampleToRealOrder,
+    deleteCancelledOrder,
   } = useOrdersState()
   const {
     products,
@@ -51,6 +58,14 @@ function App() {
       updateStock(productId, quantity, 'compra', reason, date)
     },
   )
+  const {
+    manualPurchaseLists,
+    createList,
+    updateList,
+    deleteList,
+    duplicateList,
+    convertToPurchase,
+  } = useManualPurchaseListsState(handleCreatePurchase)
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.localStorage) return undefined
@@ -129,6 +144,98 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!isClosing) return undefined
+
+    const safetyTimeout = setTimeout(() => {
+      setIsClosing(false)
+    }, 3000)
+
+    return () => clearTimeout(safetyTimeout)
+  }, [isClosing])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+
+    const debugLog = (message) => {
+      try {
+        window?.packyaLogger?.log?.('debug', message)
+      } catch {
+        void 0
+      }
+    }
+
+    const describeElement = (element) => {
+      if (!(element instanceof HTMLElement)) return 'unknown'
+
+      const tag = String(element.tagName ?? '').toLowerCase()
+      const id = element.id ? `#${element.id}` : ''
+      const className = String(element.className ?? '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('.')
+      const classes = className ? `.${className}` : ''
+
+      return `${tag}${id}${classes}`
+    }
+
+    const logIfDynamicBlockedField = (element, trigger) => {
+      if (!(element instanceof HTMLElement)) return
+
+      const isInputLike =
+        element instanceof HTMLInputElement ||
+        element instanceof HTMLTextAreaElement ||
+        element instanceof HTMLSelectElement
+
+      if (!isInputLike) return
+
+      const isDisabled = Boolean(element.disabled)
+      const isReadOnly =
+        element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+          ? Boolean(element.readOnly)
+          : false
+
+      if (!isDisabled && !isReadOnly) return
+
+      debugLog(
+        `[focus-monitor] ${trigger}: campo potencialmente bloqueado ${describeElement(element)} ` +
+          `(disabled=${isDisabled}, readOnly=${isReadOnly})`,
+      )
+    }
+
+    const logIfActiveBody = (trigger, target) => {
+      if (document.activeElement !== document.body) return
+      debugLog(
+        `[focus-monitor] ${trigger}: activeElement=body (target=${describeElement(target)})`,
+      )
+    }
+
+    const handleFocusIn = (event) => {
+      const target = event.target instanceof HTMLElement ? event.target : null
+      logIfDynamicBlockedField(target, 'focusin')
+      logIfActiveBody('focusin', target)
+    }
+
+    const handleFocusOut = (event) => {
+      const target = event.target instanceof HTMLElement ? event.target : null
+      logIfDynamicBlockedField(target, 'focusout')
+
+      window.setTimeout(() => {
+        logIfActiveBody('focusout', target)
+      }, 0)
+    }
+
+    document.addEventListener('focusin', handleFocusIn)
+    document.addEventListener('focusout', handleFocusOut)
+
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn)
+      document.removeEventListener('focusout', handleFocusOut)
+    }
+  }, [])
+
   const handleUpdateOrderStatus = (orderId, nextStatus) => {
     const targetOrder = orders.find((order) => order.id === orderId)
     if (!targetOrder) return
@@ -141,9 +248,14 @@ function App() {
     }
   }
 
-  const handleCreatePurchase = (purchaseData) => {
+  const showSaveToast = () => {
+    setSaveToastToken((prev) => prev + 1)
+    setSaveToastVisible(true)
+  }
+
+  function handleCreatePurchase(purchaseData) {
     const registeredPurchase = createPurchase(purchaseData)
-    if (!registeredPurchase) return
+    if (!registeredPurchase) return null
 
     const aggregatedByProduct = (Array.isArray(registeredPurchase.items) ? registeredPurchase.items : []).reduce(
       (acc, item) => {
@@ -171,11 +283,15 @@ function App() {
       const unitCost = totalAmount / totalUnits
       updateProductReferenceCost(productId, unitCost)
     })
+
+    showSaveToast()
+    return registeredPurchase
   }
 
   const handleCreateOrder = (orderData) => {
     // create order in orders state
     createOrder(orderData)
+    showSaveToast()
 
     if (orderData?.skipStockImpact) return
 
@@ -186,9 +302,46 @@ function App() {
     ;(Array.isArray(orderData.items) ? orderData.items : []).forEach((item) => {
       const qty = Number(item.quantity) || 0
       if (qty <= 0 || !item.productId) return
-      if (!orderData.isSample && item.isClientMaterial) return
+      if (item.isClientMaterial) return
       updateStock(item.productId, qty, movementType, `${reasonBase}`, orderData.createdAt)
     })
+  }
+
+  const handleAddExpense = (expenseData) => {
+    const savedExpense = addExpense(expenseData)
+    if (savedExpense) {
+      showSaveToast()
+    }
+    return savedExpense
+  }
+
+  const handleCreateList = (listData) => {
+    const createdList = createList(listData)
+    if (createdList) {
+      showSaveToast()
+    }
+    return createdList
+  }
+
+  const handleUpdateList = (listId, updates) => {
+    const updatedList = updateList(listId, updates)
+    if (updatedList) {
+      showSaveToast()
+    }
+    return updatedList
+  }
+
+  const handleCreateQuote = (quoteData) => {
+    const createdQuote = createQuote(quoteData)
+    if (createdQuote) {
+      showSaveToast()
+    }
+    return createdQuote
+  }
+
+  const handleUpdateQuote = (quoteId, quoteData) => {
+    updateQuote(quoteId, quoteData)
+    showSaveToast()
   }
 
   const handleCreateClient = (clientData) => upsertClient(clientData)
@@ -264,17 +417,38 @@ function App() {
               closeMessage={closeMessage}
               saveStatus={saveStatus}
               lastSavedAt={lastSavedAt}
+              saveToastVisible={saveToastVisible}
+              saveToastToken={saveToastToken}
+              onCloseSaveToast={() => setSaveToastVisible(false)}
             />
           }
         >
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route
             path="/dashboard"
-            element={<DashboardPage orders={orders} products={products} clients={clients} purchases={purchases} />}
+            element={
+              <DashboardPage
+                orders={orders}
+                products={products}
+                clients={clients}
+                purchases={purchases}
+                expenses={expenses}
+              />
+            }
           />
           <Route
             path="/finanzas"
-            element={<FinancePage orders={orders} purchases={purchases} products={products} />}
+            element={
+              <FinancePage
+                orders={orders}
+                purchases={purchases}
+                products={products}
+                expenses={expenses}
+                onAddExpense={handleAddExpense}
+                onDeleteExpense={deleteExpense}
+                getMonthlyExpenses={getMonthlyExpenses}
+              />
+            }
           />
           <Route
             path="/pedidos"
@@ -290,6 +464,7 @@ function App() {
                 onUpdateOrderDelivery={updateOrderDelivery}
                 onUpdateOrderClient={updateOrderClient}
                 onUpdateOrderItems={updateOrderItems}
+                onDeleteCancelledOrder={deleteCancelledOrder}
                 onCreateClient={handleCreateClient}
               />
             }
@@ -301,9 +476,9 @@ function App() {
                 clients={clients}
                 products={products}
                 quotes={quotes}
-                onCreateQuote={createQuote}
+                onCreateQuote={handleCreateQuote}
                 onUpdateQuoteStatus={updateQuoteStatus}
-                onUpdateQuote={updateQuote}
+                onUpdateQuote={handleUpdateQuote}
                 onConvertQuoteToOrder={handleConvertQuoteToOrder}
               />
             }
@@ -352,6 +527,22 @@ function App() {
                 onCreatePurchase={handleCreatePurchase}
                 onSaveSupplier={upsertSupplier}
                 onDeleteSupplier={deleteSupplier}
+              />
+            }
+          />
+          <Route
+            path="/listas-compra"
+            element={
+              <ManualPurchaseListsPage
+                products={products}
+                suppliers={suppliers}
+                manualPurchaseLists={manualPurchaseLists}
+                onCreateList={handleCreateList}
+                onUpdateList={handleUpdateList}
+                onDeleteList={deleteList}
+                onDuplicateList={duplicateList}
+                onConvertToPurchase={convertToPurchase}
+                onSaveSupplier={upsertSupplier}
               />
             }
           />

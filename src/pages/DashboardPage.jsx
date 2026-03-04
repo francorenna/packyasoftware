@@ -2,7 +2,8 @@ import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getClientsWithDebtCount } from '../utils/clients'
 import { calculateStockSnapshot } from '../utils/stock'
-import { getSampleMetrics } from '../utils/finance'
+import { calculateFinanceSummary, getCurrentMonthKey, getSampleMetrics } from '../utils/finance'
+import { getDashboardProductionMetrics } from '../utils/production'
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -25,10 +26,23 @@ const formatShortDate = (value) => {
   return new Date(year, month - 1, day).toLocaleDateString('es-AR')
 }
 
-function DashboardPage({ orders, products, clients, purchases }) {
+const formatDecimal = (value) =>
+  Number(value || 0).toLocaleString('es-AR', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })
+
+const stockAlertBadgeStyle = {
+  display: 'inline-flex',
+  justifyContent: 'center',
+  minWidth: '110px',
+}
+
+function DashboardPage({ orders, products, clients, purchases, expenses }) {
   const navigate = useNavigate()
-  const safeOrders = Array.isArray(orders) ? orders : []
-  const safePurchases = Array.isArray(purchases) ? purchases : []
+  const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
+  const safePurchases = useMemo(() => (Array.isArray(purchases) ? purchases : []), [purchases])
+  const safeExpenses = useMemo(() => (Array.isArray(expenses) ? expenses : []), [expenses])
 
   const summary = useMemo(() => {
     const todayKey = formatDateInput(new Date())
@@ -67,6 +81,25 @@ function DashboardPage({ orders, products, clients, purchases }) {
     const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     return getSampleMetrics({ orders: safeOrders, purchases: safePurchases, products, monthKey })
   }, [safeOrders, safePurchases, products])
+
+  const monthlyFinanceSummary = useMemo(
+    () =>
+      calculateFinanceSummary({
+        orders: safeOrders,
+        purchases: safePurchases,
+        expenses: safeExpenses,
+        monthKey: getCurrentMonthKey(),
+      }),
+    [safeOrders, safePurchases, safeExpenses],
+  )
+
+  const monthlyRealCash = Number(monthlyFinanceSummary.monthlyNet || 0)
+  const monthlyRealCashClassName =
+    monthlyRealCash > 0
+      ? 'dashboard-real-cash-value dashboard-real-cash-positive'
+      : monthlyRealCash < 0
+        ? 'dashboard-real-cash-value dashboard-real-cash-negative'
+        : 'dashboard-real-cash-value dashboard-real-cash-neutral'
 
   const cards = [
     { label: 'Total facturado', value: formatCurrency(summary.totalInvoiced) },
@@ -107,8 +140,13 @@ function DashboardPage({ orders, products, clients, purchases }) {
     [products, safeOrders],
   )
 
+  const productionMetrics = useMemo(
+    () => getDashboardProductionMetrics(safeOrders),
+    [safeOrders],
+  )
+
   const negativeStockProducts = useMemo(
-    () => stockRows.filter((product) => product.stockDisponible < 0),
+    () => stockRows.filter((product) => Number(product.stockDisponible) <= 0),
     [stockRows],
   )
 
@@ -116,8 +154,8 @@ function DashboardPage({ orders, products, clients, purchases }) {
     () =>
       stockRows.filter(
         (product) =>
-          product.stockDisponible >= 0 &&
-          product.stockDisponible < product.stockMinimo,
+          Number(product.stockDisponible) > 0 &&
+          Number(product.stockDisponible) <= 10,
       ),
     [stockRows],
   )
@@ -128,6 +166,13 @@ function DashboardPage({ orders, products, clients, purchases }) {
         <h2>Dashboard</h2>
         <p>Resumen ejecutivo en tiempo real basado en los pedidos registrados.</p>
       </header>
+
+      <section className="dashboard-recent dashboard-real-cash-block">
+        <article className="dashboard-card dashboard-real-cash-card">
+          <p>💰 Caja real del mes (cobrado - invertido - egresos)</p>
+          <strong className={monthlyRealCashClassName}>{formatCurrency(monthlyRealCash)}</strong>
+        </article>
+      </section>
 
       <div className="dashboard-grid">
         {cards.map((card) => (
@@ -188,32 +233,31 @@ function DashboardPage({ orders, products, clients, purchases }) {
 
         <div className="stock-alerts-grid">
           <article className="stock-alert-block">
-            <h4>🔴 Productos con stock negativo</h4>
+            <h4>🔴 Sin stock</h4>
             <div className="table-wrap">
               <table className="dashboard-table">
                 <thead>
                   <tr>
                     <th>Producto</th>
-                    <th>Faltante</th>
-                    <th>Sugerencia compra</th>
+                    <th>Estado</th>
+                    <th>Stock</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {negativeStockProducts.map((product) => {
-                    const faltante = Math.abs(product.stockDisponible)
-                    return (
-                      <tr key={`neg-${product.id}`}>
-                        <td>{product.name}</td>
-                        <td>{faltante}</td>
-                        <td>{faltante + product.stockMinimo}</td>
-                      </tr>
-                    )
-                  })}
+                  {negativeStockProducts.map((product) => (
+                    <tr key={`neg-${product.id}`}>
+                      <td>{product.name}</td>
+                      <td>
+                        <span className="status-badge status-cancelado" style={stockAlertBadgeStyle}>🔴 Sin stock</span>
+                      </td>
+                      <td>{product.stockDisponible}</td>
+                    </tr>
+                  ))}
 
                   {negativeStockProducts.length === 0 && (
                     <tr>
                       <td colSpan={3} className="empty-detail">
-                        Sin productos con stock negativo.
+                        Sin alertas.
                       </td>
                     </tr>
                   )}
@@ -223,35 +267,75 @@ function DashboardPage({ orders, products, clients, purchases }) {
           </article>
 
           <article className="stock-alert-block">
-            <h4>🟡 Productos con stock bajo</h4>
+            <h4>🟡 Bajo stock</h4>
             <div className="table-wrap">
               <table className="dashboard-table">
                 <thead>
                   <tr>
                     <th>Producto</th>
-                    <th>Disponible</th>
-                    <th>Mínimo</th>
+                    <th>Estado</th>
+                    <th>Stock</th>
                   </tr>
                 </thead>
                 <tbody>
                   {lowStockProducts.map((product) => (
                     <tr key={`low-${product.id}`}>
                       <td>{product.name}</td>
+                      <td>
+                        <span className="status-badge status-pendiente" style={stockAlertBadgeStyle}>🟡 Bajo stock</span>
+                      </td>
                       <td>{product.stockDisponible}</td>
-                      <td>{product.stockMinimo}</td>
                     </tr>
                   ))}
 
                   {lowStockProducts.length === 0 && (
                     <tr>
                       <td colSpan={3} className="empty-detail">
-                        Sin productos por debajo del mínimo.
+                        Sin alertas.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+          </article>
+        </div>
+      </section>
+
+      <section className="dashboard-recent">
+        <div className="card-head">
+          <h3>🖨️ PRODUCCIÓN</h3>
+        </div>
+
+        <div className="dashboard-grid">
+          <article className="dashboard-card">
+            <p>Cajas impresas hoy</p>
+            <strong>{String(productionMetrics.boxesToday)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Cajas impresas esta semana</p>
+            <strong>{String(productionMetrics.boxesWeek)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Cajas impresas este mes</p>
+            <strong>{String(productionMetrics.boxesMonth)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Trabajos realizados este mes</p>
+            <strong>{String(productionMetrics.jobsMonth)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Muestras del mes</p>
+            <strong>{String(productionMetrics.samplesMonth)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Promedio diario del mes actual</p>
+            <strong>{formatDecimal(productionMetrics.averageDailyMonth)}</strong>
           </article>
         </div>
       </section>

@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import OrdersForm from '../components/orders/OrdersForm'
 import OrdersList from '../components/orders/OrdersList'
-import { getOrderFinancialSummary } from '../utils/finance'
 import { getStockMapByProductId } from '../utils/stock'
 
 const formatDateInput = (date) => {
@@ -21,6 +20,35 @@ const parseDateInputToTimestamp = (value) => {
   return new Date(year, month - 1, day).getTime()
 }
 
+const parseDateTimeToTimestamp = (value) => {
+  const parsed = new Date(value)
+  const timestamp = parsed.getTime()
+  return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp
+}
+
+const getOrderSortGroup = (order) => {
+  if (!order || typeof order !== 'object') return Number.MAX_SAFE_INTEGER
+
+  const isSample = order.isSample === true
+  const isArchived = order.isArchived === true
+  const status = String(order.status ?? '')
+
+  if (!isSample && status === 'Pendiente') return 1
+  if (status === 'En Proceso') return 2
+  if (status === 'Listo') return 3
+  if (status === 'Entregado' && !isArchived) return 4
+  if (isSample && status === 'Pendiente') return 5
+  if (status === 'Cancelado') return 6
+
+  return Number.MAX_SAFE_INTEGER
+}
+
+const getOrderDateSortTimestamp = (order) => {
+  const deliveryTimestamp = parseDateInputToTimestamp(order?.deliveryDate)
+  if (deliveryTimestamp !== Number.POSITIVE_INFINITY) return deliveryTimestamp
+  return parseDateTimeToTimestamp(order?.createdAt)
+}
+
 function OrdersPage({
   orders,
   products,
@@ -32,6 +60,7 @@ function OrdersPage({
   onUpdateOrderDelivery,
   onUpdateOrderClient,
   onUpdateOrderItems,
+  onDeleteCancelledOrder,
   onCreateClient,
 }) {
   const [searchParams] = useSearchParams()
@@ -53,17 +82,7 @@ function OrdersPage({
   const displayedOrders = useMemo(() => {
     const activeOrders = orders.filter((order) => {
       if (order?.isArchived === true) return false
-
-      const orderStatus = String(order?.status ?? '')
-      const { remainingDebt } = getOrderFinancialSummary(order)
-      const isDeliveredWithDebt = orderStatus === 'Entregado' && remainingDebt > 0
-
-      return (
-        orderStatus === 'Pendiente' ||
-        orderStatus === 'En Proceso' ||
-        orderStatus === 'Listo' ||
-        isDeliveredWithDebt
-      )
+      return getOrderSortGroup(order) !== Number.MAX_SAFE_INTEGER
     })
 
     const filteredOrders = activeOrders.filter((order) => {
@@ -72,11 +91,12 @@ function OrdersPage({
       return true
     })
 
-    return [...filteredOrders].sort(
-      (a, b) =>
-        parseDateInputToTimestamp(a.deliveryDate) -
-        parseDateInputToTimestamp(b.deliveryDate),
-    )
+    return [...filteredOrders].sort((a, b) => {
+      const groupDiff = getOrderSortGroup(a) - getOrderSortGroup(b)
+      if (groupDiff !== 0) return groupDiff
+
+      return getOrderDateSortTimestamp(a) - getOrderDateSortTimestamp(b)
+    })
   }, [deliveryFilter, orders, todayKey, tomorrowKey])
 
   const openOrderId = searchParams.get('open') ?? null
@@ -114,6 +134,7 @@ function OrdersPage({
           onUpdateOrderDelivery={onUpdateOrderDelivery}
           onUpdateOrderClient={onUpdateOrderClient}
           onUpdateOrderItems={onUpdateOrderItems}
+          onDeleteCancelledOrder={onDeleteCancelledOrder}
           forcedOpenOrderId={openOrderId}
         />
       </div>

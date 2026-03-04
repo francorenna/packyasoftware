@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleOrderStatuses = ['Pendiente', 'Lista']
+const ORDER_DRAFT_STORAGE_KEY = 'packya_draft_order'
 
 const createEmptyItem = () => ({
   productId: '',
@@ -16,6 +17,57 @@ const createInitialQuickClientForm = () => ({
   address: '',
   notes: '',
 })
+
+const getTodayDateInput = () => {
+  const d = new Date()
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const isDateInputValue = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+
+const normalizeDraftItem = (item) => ({
+  productId: String(item?.productId ?? ''),
+  quantity: Math.max(parsePositiveNumber(item?.quantity), 1),
+  unitPrice: parsePositiveNumber(item?.unitPrice),
+  isClientMaterial: Boolean(item?.isClientMaterial ?? false),
+})
+
+const readOrderDraftFromSessionStorage = () => {
+  if (typeof window === 'undefined' || !window.sessionStorage) return null
+
+  try {
+    const raw = window.sessionStorage.getItem(ORDER_DRAFT_STORAGE_KEY)
+    if (!raw) return null
+
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const persistOrderDraftToSessionStorage = (draft) => {
+  if (typeof window === 'undefined' || !window.sessionStorage) return
+
+  try {
+    window.sessionStorage.setItem(ORDER_DRAFT_STORAGE_KEY, JSON.stringify(draft))
+  } catch {
+    void 0
+  }
+}
+
+const clearOrderDraftFromSessionStorage = () => {
+  if (typeof window === 'undefined' || !window.sessionStorage) return
+
+  try {
+    window.sessionStorage.removeItem(ORDER_DRAFT_STORAGE_KEY)
+  } catch {
+    void 0
+  }
+}
 
 const parsePositiveNumber = (value) => {
   const parsed = Number(value)
@@ -42,6 +94,8 @@ function OrdersForm({
   const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeClients = Array.isArray(clients) ? clients : []
   const safeStockByProductId = stockByProductId ?? {}
+  const initialDraft = useMemo(() => readOrderDraftFromSessionStorage(), [])
+  const shouldSkipDraftPersistRef = useRef(false)
   const productById = useMemo(
     () =>
       safeProducts.reduce((acc, product) => {
@@ -51,31 +105,93 @@ function OrdersForm({
     [safeProducts],
   )
 
-  const [clientId, setClientId] = useState('')
-  const [status, setStatus] = useState(orderStatuses[0])
-  const [deliveryDate, setDeliveryDate] = useState('')
-  const [discount, setDiscount] = useState(0)
-  const [items, setItems] = useState([createEmptyItem()])
+  const [clientId, setClientId] = useState(() => String(initialDraft?.clientId ?? ''))
+  const [status, setStatus] = useState(() => {
+    const draftIsSample = Boolean(initialDraft?.isSample)
+    const allowedStatuses = draftIsSample ? sampleOrderStatuses : orderStatuses
+    const draftStatus = String(initialDraft?.status ?? allowedStatuses[0])
+    return allowedStatuses.includes(draftStatus) ? draftStatus : allowedStatuses[0]
+  })
+  const [deliveryDate, setDeliveryDate] = useState(() =>
+    isDateInputValue(initialDraft?.deliveryDate) ? initialDraft.deliveryDate : '',
+  )
+  const [financialNote, setFinancialNote] = useState(() => String(initialDraft?.financialNote ?? ''))
+  const [discount, setDiscount] = useState(() => parsePositiveNumber(initialDraft?.discount))
+  const [items, setItems] = useState(() => {
+    const draftItems = Array.isArray(initialDraft?.items)
+      ? initialDraft.items.map((item) => normalizeDraftItem(item))
+      : []
+
+    return draftItems.length > 0 ? draftItems : [createEmptyItem()]
+  })
   const [createdAt, setCreatedAt] = useState(() => {
-    const d = new Date()
-    const year = d.getFullYear()
-    const month = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
+    return isDateInputValue(initialDraft?.createdAt) ? initialDraft.createdAt : getTodayDateInput()
   })
   const [productionDate, setProductionDate] = useState(() => {
-    const d = new Date()
-    const year = d.getFullYear()
-    const month = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
+    return isDateInputValue(initialDraft?.productionDate)
+      ? initialDraft.productionDate
+      : getTodayDateInput()
   })
-  const [isSample, setIsSample] = useState(false)
-  const [sampleClientName, setSampleClientName] = useState('')
-  const [sampleClientPhone, setSampleClientPhone] = useState('')
-  const [isQuickCreateClientOpen, setIsQuickCreateClientOpen] = useState(false)
-  const [quickClientForm, setQuickClientForm] = useState(() => createInitialQuickClientForm())
+  const [isSample, setIsSample] = useState(() => Boolean(initialDraft?.isSample))
+  const [sampleClientName, setSampleClientName] = useState(() => String(initialDraft?.sampleClientName ?? ''))
+  const [sampleClientPhone, setSampleClientPhone] = useState(() => String(initialDraft?.sampleClientPhone ?? ''))
+  const [isQuickCreateClientOpen, setIsQuickCreateClientOpen] = useState(
+    () => Boolean(initialDraft?.isQuickCreateClientOpen),
+  )
+  const [quickClientForm, setQuickClientForm] = useState(() => ({
+    ...createInitialQuickClientForm(),
+    ...(initialDraft?.quickClientForm && typeof initialDraft.quickClientForm === 'object'
+      ? {
+          name: String(initialDraft.quickClientForm?.name ?? ''),
+          phone: String(initialDraft.quickClientForm?.phone ?? ''),
+          address: String(initialDraft.quickClientForm?.address ?? ''),
+          notes: String(initialDraft.quickClientForm?.notes ?? ''),
+        }
+      : {}),
+  }))
   const [quickClientError, setQuickClientError] = useState('')
+
+  useEffect(() => {
+    if (shouldSkipDraftPersistRef.current) {
+      shouldSkipDraftPersistRef.current = false
+      return
+    }
+
+    persistOrderDraftToSessionStorage({
+      clientId,
+      status,
+      deliveryDate,
+      financialNote: String(financialNote ?? ''),
+      discount: parsePositiveNumber(discount),
+      items: (Array.isArray(items) ? items : []).map((item) => normalizeDraftItem(item)),
+      createdAt,
+      productionDate,
+      isSample,
+      sampleClientName,
+      sampleClientPhone,
+      isQuickCreateClientOpen,
+      quickClientForm: {
+        name: String(quickClientForm?.name ?? ''),
+        phone: String(quickClientForm?.phone ?? ''),
+        address: String(quickClientForm?.address ?? ''),
+        notes: String(quickClientForm?.notes ?? ''),
+      },
+    })
+  }, [
+    clientId,
+    status,
+    deliveryDate,
+    financialNote,
+    discount,
+    items,
+    createdAt,
+    productionDate,
+    isSample,
+    sampleClientName,
+    sampleClientPhone,
+    isQuickCreateClientOpen,
+    quickClientForm,
+  ])
 
   const availableStatuses = isSample ? sampleOrderStatuses : orderStatuses
 
@@ -226,6 +342,7 @@ function OrdersForm({
       isArchived: false,
       archivedAt: null,
       deliveryDate,
+      financialNote: String(financialNote ?? '').trim(),
       total: isSample ? 0 : total,
       discount: normalizedDiscount,
       items: sanitizedItems,
@@ -234,10 +351,13 @@ function OrdersForm({
     }
 
     onCreate(payload)
+    shouldSkipDraftPersistRef.current = true
+    clearOrderDraftFromSessionStorage()
 
     setClientId('')
     setStatus(orderStatuses[0])
     setDeliveryDate('')
+    setFinancialNote('')
     setDiscount(0)
     setItems([createEmptyItem()])
     setProductionDate(createdAt)
@@ -506,6 +626,15 @@ function OrdersForm({
             value={discount}
             onChange={(event) => setDiscount(event.target.value)}
             placeholder="Descuento"
+          />
+        </label>
+
+        <label>
+          Observación financiera
+          <textarea
+            value={financialNote}
+            onChange={(event) => setFinancialNote(event.target.value)}
+            placeholder="Observación financiera (opcional)"
           />
         </label>
 

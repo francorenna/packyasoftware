@@ -204,10 +204,12 @@ const normalizeOrder = (order, index) => {
     deliveryType: String(order.deliveryType ?? '').trim(),
     deliveredBy: String(order.deliveredBy ?? '').trim(),
     trackingNumber: String(order.trackingNumber ?? '').trim(),
+    deliveryNote: String(order.deliveryNote ?? order.deliveryDetails ?? '').trim(),
     deliveryDetails: String(order.deliveryDetails ?? '').trim(),
     productionTime: String(order.productionTime ?? '').trim(),
     sourceQuoteId: String(order.sourceQuoteId ?? '').trim(),
     shippingCost: toPositiveNumber(order.shippingCost),
+    financialNote: String(order.financialNote ?? '').trim(),
     discount: toPositiveNumber(order.discount),
     isSample: Boolean(order.isSample ?? false),
     isArchived: Boolean(order.isArchived ?? false),
@@ -279,10 +281,12 @@ function useOrdersState() {
         deliveryType: String(newOrder.deliveryType ?? '').trim(),
         deliveredBy: String(newOrder.deliveredBy ?? '').trim(),
         trackingNumber: String(newOrder.trackingNumber ?? '').trim(),
+        deliveryNote: String(newOrder.deliveryNote ?? newOrder.deliveryDetails ?? '').trim(),
         deliveryDetails: String(newOrder.deliveryDetails ?? '').trim(),
         productionTime: String(newOrder.productionTime ?? '').trim(),
         sourceQuoteId: String(newOrder.sourceQuoteId ?? '').trim(),
         shippingCost: toPositiveNumber(newOrder.shippingCost),
+        financialNote: String(newOrder.financialNote ?? '').trim(),
         isArchived: Boolean(newOrder.isArchived ?? false),
         archivedAt: newOrder.archivedAt ?? null,
         payments: [],
@@ -357,10 +361,36 @@ function useOrdersState() {
             toIsoString(safeDeliveryData.productionDate) ||
             toDateOnlyIso(String(safeDeliveryData.productionDate ?? '')) ||
             order.productionDate,
-          deliveredVia: String(safeDeliveryData.deliveredVia ?? order.deliveredVia ?? '').trim(),
+          deliveredVia: String(
+            safeDeliveryData.deliveredVia ??
+              safeDeliveryData.deliveryType ??
+              order.deliveredVia ??
+              order.deliveryType ??
+              '',
+          ).trim(),
+          deliveryType: String(
+            safeDeliveryData.deliveryType ??
+              safeDeliveryData.deliveredVia ??
+              order.deliveryType ??
+              order.deliveredVia ??
+              '',
+          ).trim(),
           deliveredBy: String(safeDeliveryData.deliveredBy ?? order.deliveredBy ?? '').trim(),
           trackingNumber: String(safeDeliveryData.trackingNumber ?? order.trackingNumber ?? '').trim(),
-          deliveryDetails: String(safeDeliveryData.deliveryDetails ?? order.deliveryDetails ?? '').trim(),
+          deliveryNote: String(
+            safeDeliveryData.deliveryNote ??
+              safeDeliveryData.deliveryDetails ??
+              order.deliveryNote ??
+              order.deliveryDetails ??
+              '',
+          ).trim(),
+          deliveryDetails: String(
+            safeDeliveryData.deliveryDetails ??
+              safeDeliveryData.deliveryNote ??
+              order.deliveryDetails ??
+              order.deliveryNote ??
+              '',
+          ).trim(),
           shippingCost: toPositiveNumber(
             safeDeliveryData.shippingCost ?? order.shippingCost,
           ),
@@ -486,6 +516,15 @@ function useOrdersState() {
     )
   }
 
+  const deleteCancelledOrder = (orderId) => {
+    setOrders((prevOrders) =>
+      prevOrders.filter((order) => {
+        if (order.id !== orderId) return true
+        return String(order.status ?? '') !== 'Cancelado'
+      }),
+    )
+  }
+
   return {
     orders,
     createOrder,
@@ -496,6 +535,7 @@ function useOrdersState() {
     updateOrderClient,
     updateOrderItems,
     convertSampleToRealOrder,
+    deleteCancelledOrder,
   }
 }
 

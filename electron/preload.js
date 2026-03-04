@@ -13,3 +13,17 @@ contextBridge.exposeInMainWorld('packyaDesktop', {
     }
   },
 })
+
+contextBridge.exposeInMainWorld('packyaLogger', {
+  log: (level, message, stack) => {
+    try {
+      ipcRenderer.send('log:error', {
+        level,
+        message,
+        stack,
+      })
+    } catch {
+      void 0
+    }
+  },
+})

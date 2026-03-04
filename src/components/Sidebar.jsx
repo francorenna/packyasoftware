@@ -11,6 +11,7 @@ const navItems = [
   { to: '/clientes', label: 'Clientes' },
   { to: '/productos', label: 'Productos' },
   { to: '/compras', label: 'Compras' },
+  { to: '/listas-compra', label: '🛒 Listas de Compra' },
   { to: '/stock', label: 'Stock' },
   { to: '/configuracion', label: '⚙ Configuración' },
 ]

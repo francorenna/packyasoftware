@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from 'electron'
-import fs from 'node:fs/promises'
+import { app, BrowserWindow, ipcMain } from 'electron'
+import fs from 'node:fs'
+import fsPromises from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -11,6 +12,9 @@ let allowWindowClose = false
 let backupAlreadyExecuted = false
 let backupInFlightPromise = null
 const AUTO_BACKUP_ENABLED = true
+const LOG_RETENTION_DAYS = 7
+let logsDirPath = ''
+let currentLogFilePath = ''
 
 const BACKUP_KEYS = [
   'packya_orders',
@@ -19,11 +23,79 @@ const BACKUP_KEYS = [
   'packya_purchases',
   'packya_suppliers',
   'packya_purchase_plans',
+  'packya_expenses',
+  'packya_manual_purchase_lists',
   'packya_quotes',
   'packya_storage_version',
 ]
 
 const toDatePart = (value) => String(value).padStart(2, '0')
+
+const formatLogDate = (date) => {
+  const year = date.getFullYear()
+  const month = toDatePart(date.getMonth() + 1)
+  const day = toDatePart(date.getDate())
+  return `${year}-${month}-${day}`
+}
+
+const getLogFilePathForDate = (date) => path.join(logsDirPath, `app-${formatLogDate(date)}.log`)
+
+const appendInternalLog = (level, message, stack = '') => {
+  try {
+    if (!currentLogFilePath) return
+
+    const allowedLevel = ['error', 'warn', 'info'].includes(level) ? level : 'info'
+    const normalizedMessage = String(message ?? '').trim() || 'Mensaje vacío'
+    const timestamp = new Date().toISOString()
+    const stackBlock = stack ? `\n${String(stack)}` : ''
+    const line = `[${timestamp}] [${allowedLevel.toUpperCase()}] ${normalizedMessage}${stackBlock}\n`
+
+    fs.appendFile(currentLogFilePath, line, 'utf-8', () => {
+    })
+  } catch {
+    void 0
+  }
+}
+
+const cleanupOldLogs = async () => {
+  try {
+    if (!logsDirPath) return
+
+    const entries = await fsPromises.readdir(logsDirPath, { withFileTypes: true })
+    const now = Date.now()
+    const maxAgeMs = LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000
+
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && /^app-\d{4}-\d{2}-\d{2}\.log$/i.test(entry.name))
+        .map(async (entry) => {
+          const filePath = path.join(logsDirPath, entry.name)
+          const stats = await fsPromises.stat(filePath)
+          if (now - stats.mtimeMs > maxAgeMs) {
+            await fsPromises.unlink(filePath)
+          }
+        }),
+    )
+  } catch {
+    void 0
+  }
+}
+
+const initializeLogger = async () => {
+  try {
+    const userDataPath = app.getPath('userData')
+    logsDirPath = path.join(userDataPath, 'logs')
+    await fsPromises.mkdir(logsDirPath, { recursive: true })
+
+    currentLogFilePath = getLogFilePathForDate(new Date())
+    await fsPromises.writeFile(currentLogFilePath, '', { flag: 'a', encoding: 'utf-8' })
+
+    await cleanupOldLogs()
+    appendInternalLog('info', `Logger inicializado en ${currentLogFilePath}`)
+  } catch {
+    void 0
+  }
+}
 
 const getBackupFileName = (date) => {
   const year = date.getFullYear()
@@ -67,11 +139,12 @@ const writeAutomaticBackup = async (data) => {
 
   const documentsPath = app.getPath('documents')
   const backupDir = path.join(documentsPath, 'Packya Backups')
-  await fs.mkdir(backupDir, { recursive: true })
+  await fsPromises.mkdir(backupDir, { recursive: true })
 
   const fileName = getBackupFileName(now)
   const targetPath = path.join(backupDir, fileName)
-  await fs.writeFile(targetPath, JSON.stringify(payload, null, 2), 'utf-8')
+  await fsPromises.writeFile(targetPath, JSON.stringify(payload, null, 2), 'utf-8')
+  console.info('[auto-backup] Claves exportadas:', BACKUP_KEYS)
 }
 
 const backupOnBeforeQuit = async () => {
@@ -206,6 +279,19 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  void initializeLogger()
+
+  ipcMain.on('log:error', (_event, payload) => {
+    try {
+      const level = String(payload?.level ?? 'error').toLowerCase()
+      const message = String(payload?.message ?? 'Sin mensaje')
+      const stack = payload?.stack ? String(payload.stack) : ''
+      appendInternalLog(level, message, stack)
+    } catch {
+      void 0
+    }
+  })
+
   createWindow()
 
   app.on('activate', () => {
@@ -218,5 +304,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  appendInternalLog('info', 'Cierre de aplicación iniciado')
   void backupOnBeforeQuit()
 })

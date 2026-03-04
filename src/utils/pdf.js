@@ -34,6 +34,26 @@ const formatDateTime = (value) => {
   })
 }
 
+const toFileDate = (value = new Date()) => {
+  const parsed = new Date(value)
+  const safeDate = Number.isNaN(parsed.getTime()) ? new Date() : parsed
+  const year = safeDate.getFullYear()
+  const month = String(safeDate.getMonth() + 1).padStart(2, '0')
+  const day = String(safeDate.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const sanitizeFilePart = (value) => {
+  const normalized = String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9-_]/g, '')
+    .trim()
+
+  return normalized || 'SinCliente'
+}
+
 // logoPackya is imported as a bundled asset URL by Vite
 
 const getPaymentQrDataUrl = async () => {
@@ -65,6 +85,7 @@ export async function generateOrderPDF(order) {
   const clientName = String(safeOrder.clientName ?? safeOrder.client ?? 'Sin cliente')
   const clientPhone = String(safeOrder.phone ?? safeOrder.clientPhone ?? '').trim()
   const orderStatus = String(safeOrder.status ?? 'Pendiente')
+  const financialNote = String(safeOrder.financialNote ?? '').trim()
   const { items, payments, effectiveSubtotal, discount, finalTotal, totalPaid, remainingDebt, financialStatus } =
     getOrderFinancialSummary(safeOrder)
   const issuedAt = formatDate(new Date().toISOString())
@@ -336,6 +357,27 @@ export async function generateOrderPDF(order) {
     valueSize: 12,
   })
 
+  if (financialNote) {
+    const noteLines = doc.splitTextToSize(financialNote, contentWidth - 8)
+    const noteHeight = Math.max(14, 8 + noteLines.length * 4.5)
+
+    ensureSpace(noteHeight + 4)
+    doc.setFillColor(colors.bgSoft[0], colors.bgSoft[1], colors.bgSoft[2])
+    doc.roundedRect(margin, cursorY, contentWidth, noteHeight, 2, 2, 'F')
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9.5)
+    setText(colors.textMuted)
+    doc.text('Observación:', margin + 4, cursorY + 5.5)
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.5)
+    setText(colors.textMain)
+    doc.text(noteLines, margin + 4, cursorY + 10.5)
+
+    cursorY += noteHeight + 4
+  }
+
   drawSectionTitle('Resumen financiero')
 
   drawRow('Total abonado', formatCurrency(totalPaid))
@@ -439,7 +481,9 @@ export async function generateOrderPDF(order) {
   cursorY += 5
   doc.text('Documento generado automáticamente por PACKYA – Sistema de Gestión', pageWidth / 2, cursorY, { align: 'center' })
 
-  doc.save(`${orderId}-orden-pedido.pdf`)
+  const clientNameForFile = sanitizeFilePart(safeOrder.clientName ?? safeOrder.client ?? 'SinCliente')
+  const orderFileDate = toFileDate(new Date())
+  doc.save(`Pedido_${clientNameForFile}_${orderFileDate}.pdf`)
 }
 
 export async function generateClientStatementPDF(client, orders) {
@@ -1102,5 +1146,141 @@ export async function generateQuotePDF(quote) {
   setText(colors.textMuted)
   doc.text('Documento generado automáticamente por PACKYA – Presupuesto no fiscal.', pageWidth / 2, cursorY, { align: 'center' })
 
-  doc.save(`${quoteId}.pdf`)
+  const quoteClientNameForFile = sanitizeFilePart(clientName || 'SinCliente')
+  const quoteFileDate = toFileDate(new Date())
+  doc.save(`Presupuesto_${quoteClientNameForFile}_${quoteFileDate}.pdf`)
+}
+
+export async function generateManualPurchaseListPDF(list) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const margin = 18
+  const contentWidth = pageWidth - margin * 2
+  let cursorY = 14
+
+  const safeList = list && typeof list === 'object' ? list : {}
+  const listId = String(safeList.id ?? `MPL-${Date.now()}`)
+  const supplierName = String(safeList.supplierName ?? 'Proveedor sin definir').trim() || 'Proveedor sin definir'
+  const issuedDate = formatDate(safeList.createdAt ?? new Date().toISOString())
+  const items = Array.isArray(safeList.items) ? safeList.items : []
+
+  const ensureSpace = (heightNeeded) => {
+    if (cursorY + heightNeeded <= pageHeight - margin) return
+    doc.addPage()
+    cursorY = margin
+  }
+
+  doc.setFillColor(211, 38, 128)
+  doc.rect(0, 0, pageWidth, 9, 'F')
+  cursorY += 2
+
+  if (logoPackya) {
+    const logoWidth = 24
+    const logoHeight = 24
+    doc.addImage(logoPackya, 'PNG', pageWidth / 2 - logoWidth / 2, cursorY, logoWidth, logoHeight)
+    cursorY += logoHeight + 5
+  }
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(20)
+  doc.setTextColor(15, 23, 42)
+  doc.text('Lista de Compra', pageWidth / 2, cursorY, { align: 'center' })
+  cursorY += 7
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(10)
+  doc.setTextColor(100, 116, 139)
+  doc.text(`N° ${listId}`, pageWidth / 2, cursorY, { align: 'center' })
+  cursorY += 10
+
+  doc.setDrawColor(226, 232, 240)
+  doc.line(margin, cursorY, pageWidth - margin, cursorY)
+  cursorY += 7
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10.5)
+  doc.setTextColor(15, 23, 42)
+  doc.text('Fecha', margin, cursorY)
+  doc.setFont('helvetica', 'normal')
+  doc.text(issuedDate, margin + 22, cursorY)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Proveedor', margin + 80, cursorY)
+  doc.setFont('helvetica', 'normal')
+  doc.text(supplierName, margin + 104, cursorY)
+  cursorY += 8
+
+  const columns = [
+    { label: 'Producto', width: contentWidth * 0.75, align: 'left' },
+    { label: 'Cantidad', width: contentWidth * 0.25, align: 'right' },
+  ]
+
+  const drawHeader = () => {
+    doc.setFillColor(248, 250, 252)
+    doc.rect(margin, cursorY - 4.5, contentWidth, 7, 'F')
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9.5)
+    doc.setTextColor(51, 65, 85)
+
+    let x = margin
+    columns.forEach((column) => {
+      const textX = column.align === 'right' ? x + column.width - 1 : x + 1
+      doc.text(column.label, textX, cursorY, {
+        align: column.align === 'right' ? 'right' : 'left',
+      })
+      x += column.width
+    })
+
+    cursorY += 7.6
+    doc.setDrawColor(226, 232, 240)
+    doc.line(margin, cursorY - 3, margin + contentWidth, cursorY - 3)
+  }
+
+  const drawItem = (item) => {
+    ensureSpace(8)
+
+    const productName =
+      String(item?.productName ?? '').trim() ||
+      String(item?.productId ?? '').trim() ||
+      'Producto sin definir'
+    const quantity = String(Math.max(Number(item?.quantity || 0), 0))
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.3)
+    doc.setTextColor(15, 23, 42)
+
+    let x = margin
+    doc.text(doc.splitTextToSize(productName, columns[0].width - 2), x + 1, cursorY)
+    x += columns[0].width
+    doc.text(quantity, x + columns[1].width - 1, cursorY, { align: 'right' })
+
+    cursorY += 5.8
+    doc.setDrawColor(241, 245, 249)
+    doc.line(margin, cursorY - 2, margin + contentWidth, cursorY - 2)
+  }
+
+  drawHeader()
+
+  if (items.length > 0) {
+    items.forEach((item) => drawItem(item))
+  } else {
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(10)
+    doc.setTextColor(100, 116, 139)
+    doc.text('Sin ítems cargados.', margin, cursorY + 2)
+    cursorY += 8
+  }
+
+  ensureSpace(12)
+  cursorY += 6
+  doc.setDrawColor(226, 232, 240)
+  doc.line(margin, cursorY, pageWidth - margin, cursorY)
+  cursorY += 5
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.7)
+  doc.setTextColor(100, 116, 139)
+  doc.text('Documento interno generado por Packya Gestión.', pageWidth / 2, cursorY, { align: 'center' })
+
+  doc.save(`${listId}.pdf`)
 }

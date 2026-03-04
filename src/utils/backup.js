@@ -5,9 +5,13 @@ const STORAGE_KEYS = {
   suppliers: 'packya_suppliers',
   purchases: 'packya_purchases',
   purchasePlans: 'packya_purchase_plans',
+  expenses: 'packya_expenses',
+  manualPurchaseLists: 'packya_manual_purchase_lists',
   quotes: 'packya_quotes',
   storageVersion: 'packya_storage_version',
 }
+
+const BACKUP_KEYS = Object.values(STORAGE_KEYS)
 
 const BACKUP_VERSION = '1.0.0'
 
@@ -68,6 +72,17 @@ const ensureValidBackup = (backup) => {
   if (backup.data.quotes !== undefined && !Array.isArray(backup.data.quotes)) {
     throw new Error('El respaldo tiene formato inválido en presupuestos.')
   }
+
+  if (backup.data.expenses !== undefined && !Array.isArray(backup.data.expenses)) {
+    throw new Error('El respaldo tiene formato inválido en egresos.')
+  }
+
+  if (
+    backup.data.manualPurchaseLists !== undefined &&
+    !Array.isArray(backup.data.manualPurchaseLists)
+  ) {
+    throw new Error('El respaldo tiene formato inválido en listas manuales de compra.')
+  }
 }
 
 export function exportBackup() {
@@ -81,10 +96,14 @@ export function exportBackup() {
       suppliers: parseStoredArray(STORAGE_KEYS.suppliers),
       purchases: parseStoredArray(STORAGE_KEYS.purchases),
       purchasePlans: parseStoredArray(STORAGE_KEYS.purchasePlans),
+      expenses: parseStoredArray(STORAGE_KEYS.expenses),
+      manualPurchaseLists: parseStoredArray(STORAGE_KEYS.manualPurchaseLists),
       quotes: parseStoredArray(STORAGE_KEYS.quotes),
       storageVersion: parseStoredValue(STORAGE_KEYS.storageVersion),
     },
   }
+
+  console.info('[backup] Exportando claves:', BACKUP_KEYS)
 
   const json = JSON.stringify(payload, null, 2)
   const blob = new Blob([json], { type: 'application/json' })
@@ -110,6 +129,8 @@ export function getCurrentBackupCounts() {
     clients: parseStoredArray(STORAGE_KEYS.clients).length,
     suppliers: parseStoredArray(STORAGE_KEYS.suppliers).length,
     purchases: parseStoredArray(STORAGE_KEYS.purchases).length,
+    expenses: parseStoredArray(STORAGE_KEYS.expenses).length,
+    manualPurchaseLists: parseStoredArray(STORAGE_KEYS.manualPurchaseLists).length,
     quotes: parseStoredArray(STORAGE_KEYS.quotes).length,
   }
 }
@@ -140,6 +161,10 @@ export async function readBackupPreview(file) {
       suppliers: parsed.data.suppliers.length,
       purchases: parsed.data.purchases.length,
       purchasePlans: Array.isArray(parsed.data.purchasePlans) ? parsed.data.purchasePlans.length : 0,
+      expenses: Array.isArray(parsed.data.expenses) ? parsed.data.expenses.length : 0,
+      manualPurchaseLists: Array.isArray(parsed.data.manualPurchaseLists)
+        ? parsed.data.manualPurchaseLists.length
+        : 0,
       quotes: Array.isArray(parsed.data.quotes) ? parsed.data.quotes.length : 0,
     },
   }
@@ -179,6 +204,16 @@ export async function importBackup(file) {
     JSON.stringify(Array.isArray(parsed.data.purchasePlans) ? parsed.data.purchasePlans : []),
   )
   localStorage.setItem(
+    STORAGE_KEYS.expenses,
+    JSON.stringify(Array.isArray(parsed.data.expenses) ? parsed.data.expenses : []),
+  )
+  localStorage.setItem(
+    STORAGE_KEYS.manualPurchaseLists,
+    JSON.stringify(
+      Array.isArray(parsed.data.manualPurchaseLists) ? parsed.data.manualPurchaseLists : [],
+    ),
+  )
+  localStorage.setItem(
     STORAGE_KEYS.quotes,
     JSON.stringify(Array.isArray(parsed.data.quotes) ? parsed.data.quotes : []),
   )
@@ -187,6 +222,8 @@ export async function importBackup(file) {
   if (storageVersion !== null && storageVersion !== undefined) {
     localStorage.setItem(STORAGE_KEYS.storageVersion, String(storageVersion))
   }
+
+  console.info('[backup] Restaurando claves:', BACKUP_KEYS)
 
   window.location.reload()
   return { cancelled: false }

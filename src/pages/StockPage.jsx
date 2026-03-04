@@ -50,6 +50,28 @@ const createManualPlanRow = () => ({
   unitCost: '',
 })
 
+const stockAlertBadgeStyle = {
+  display: 'inline-flex',
+  justifyContent: 'center',
+  minWidth: '110px',
+}
+
+const centeredAlertCellStyle = {
+  textAlign: 'center',
+}
+
+const modalContainerStyle = {
+  maxHeight: '90vh',
+  display: 'flex',
+  flexDirection: 'column',
+}
+
+const modalBodyStyle = {
+  overflowY: 'auto',
+  flex: 1,
+  minHeight: 0,
+}
+
 function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProductReferenceCost }) {
   const safeProducts = Array.isArray(products) ? products : []
   const safeOrders = Array.isArray(orders) ? orders : []
@@ -58,6 +80,9 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
   const [productId, setProductId] = useState('')
   const [mode, setMode] = useState('sum') // 'sum' or 'sub'
   const [quantity, setQuantity] = useState('')
+  const [countedStock, setCountedStock] = useState('')
+  const [wasPurchase, setWasPurchase] = useState(false)
+  const [purchaseSpent, setPurchaseSpent] = useState('')
   const [reason, setReason] = useState('')
   const [plans, setPlans] = useState(() => loadPurchasePlans())
   const [costModalOpen, setCostModalOpen] = useState(false)
@@ -190,6 +215,23 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
       }
     })
   }, [safeProducts])
+
+  const stockByProductId = useMemo(
+    () =>
+      productStockSummary.reduce((acc, row) => {
+        acc[String(row.id)] = Number(row.stockActual || 0)
+        return acc
+      }, {}),
+    [productStockSummary],
+  )
+
+  const selectedProductStock = Number(stockByProductId[String(productId ?? '')] || 0)
+
+  const countedStockNumber = Number(countedStock)
+  const previewSetDifference =
+    mode === 'set' && !Number.isNaN(countedStockNumber)
+      ? countedStockNumber - selectedProductStock
+      : null
 
   useEffect(() => {
     try {
@@ -493,20 +535,66 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
     setProductId('')
     setMode('sum')
     setQuantity('')
+    setCountedStock('')
+    setWasPurchase(false)
+    setPurchaseSpent('')
     setReason('')
     const d = new Date()
     setDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2,'0')}`)
   }
 
   const handleApply = () => {
-    const qty = Number(quantity)
-    if (!productId || Number.isNaN(qty) || qty <= 0 || !reason.trim()) return
+    if (!productId || !reason.trim()) return
 
-    const signed = mode === 'sum' ? Math.abs(qty) : -Math.abs(qty)
+    let signed = 0
+
+    if (mode === 'set') {
+      const targetStock = Number(countedStock)
+      if (Number.isNaN(targetStock) || targetStock < 0) return
+
+      signed = Math.trunc(targetStock - selectedProductStock)
+      if (signed === 0) return
+    } else {
+      const qty = Number(quantity)
+      if (Number.isNaN(qty) || qty <= 0) return
+      signed = mode === 'sum' ? Math.abs(qty) : -Math.abs(qty)
+    }
+
+    if (wasPurchase) {
+      const spent = Number(purchaseSpent)
+      if (signed <= 0 || Number.isNaN(spent) || spent <= 0) return
+      const derivedUnitCost = spent / signed
+      if (Number.isFinite(derivedUnitCost) && derivedUnitCost > 0) {
+        onUpdateProductReferenceCost?.(productId, derivedUnitCost)
+      }
+    }
+
+    const reasonWithSpend = (() => {
+      if (!wasPurchase) return reason.trim()
+      const spent = Number(purchaseSpent)
+      if (Number.isNaN(spent) || spent <= 0) return reason.trim()
+      return `${reason.trim()} | Gasto reposición: ${formatCurrency(spent)}`
+    })()
+
     const isoDate = new Date(`${date}T00:00:00`).toISOString()
-    onAdjustStock(productId, signed, reason.trim(), isoDate)
+    onAdjustStock(productId, signed, reasonWithSpend, isoDate)
     reset()
     setOpen(false)
+  }
+
+  const openQuickStockCorrection = (targetProductId) => {
+    const safeProductId = String(targetProductId ?? '').trim()
+    if (!safeProductId) return
+
+    const currentStock = Number(stockByProductId[safeProductId] || 0)
+    setOpen(true)
+    setProductId(safeProductId)
+    setMode('set')
+    setCountedStock(String(Math.max(currentStock, 0)))
+    setQuantity('')
+    setWasPurchase(false)
+    setPurchaseSpent('')
+    setReason('Regularización por conteo físico')
   }
 
   return (
@@ -544,13 +632,58 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
               <select value={mode} onChange={(e) => setMode(e.target.value)}>
                 <option value="sum">Sumar</option>
                 <option value="sub">Restar</option>
+                <option value="set">Establecer stock real</option>
               </select>
             </label>
 
-            <label>
-              Cantidad
-              <input type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+            {mode === 'set' ? (
+              <>
+                <label>
+                  Stock real contado
+                  <input type="number" min="0" value={countedStock} onChange={(e) => setCountedStock(e.target.value)} />
+                </label>
+                <p className="payment-helper" style={{ marginTop: -4 }}>
+                  Stock actual: <strong>{selectedProductStock}</strong>
+                  {previewSetDifference !== null && (
+                    <>
+                      {' '}· Ajuste a aplicar:{' '}
+                      <strong className={previewSetDifference < 0 ? 'finance-result-negative' : ''}>
+                        {previewSetDifference >= 0 ? `+${previewSetDifference}` : previewSetDifference}
+                      </strong>
+                    </>
+                  )}
+                </p>
+              </>
+            ) : (
+              <label>
+                Cantidad
+                <input type="number" min="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              </label>
+            )}
+
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={wasPurchase}
+                onChange={(event) => setWasPurchase(event.target.checked)}
+                disabled={mode === 'sub'}
+              />
+              Fue reposición por compra
             </label>
+
+            {wasPurchase && (
+              <label>
+                Gasto total de esta reposición
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={purchaseSpent}
+                  onChange={(event) => setPurchaseSpent(event.target.value)}
+                  placeholder="Monto gastado"
+                />
+              </label>
+            )}
 
             <label>
               Motivo
@@ -577,10 +710,12 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
                 <th>Producto</th>
                 <th>Costo referencia</th>
                 <th>Stock actual</th>
+                <th style={centeredAlertCellStyle}>Alerta</th>
                 <th>Total comprado</th>
                 <th>Total vendido</th>
                 <th>Total muestras</th>
                 <th>Último movimiento</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -589,25 +724,38 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
                   <td>{product.name}</td>
                   <td>{formatCurrency(product.referenceCost)}</td>
                   <td>
-                    <span className={Number(product.stockActual) < 0 ? 'finance-result-negative' : ''}>
+                    <span className={Number(product.stockActual) <= 0 ? 'finance-result-negative' : ''}>
                       {product.stockActual}
                     </span>
-                    {Number(product.stockActual) < 0 && (
-                      <p className="payment-error" style={{ margin: 0 }}>
-                        Stock negativo
-                      </p>
+                  </td>
+                  <td style={centeredAlertCellStyle}>
+                    {Number(product.stockActual) <= 0 ? (
+                      <span className="status-badge status-cancelado" style={stockAlertBadgeStyle}>🔴 Sin stock</span>
+                    ) : Number(product.stockActual) <= 10 ? (
+                      <span className="status-badge status-pendiente" style={stockAlertBadgeStyle}>🟡 Bajo stock</span>
+                    ) : (
+                      <span style={stockAlertBadgeStyle}>-</span>
                     )}
                   </td>
                   <td>{product.totalComprado}</td>
                   <td>{product.totalVendido}</td>
                   <td>{product.totalMuestras}</td>
                   <td>{formatDateTime(product.lastMovementDate)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => openQuickStockCorrection(product.id)}
+                    >
+                      Corregir stock
+                    </button>
+                  </td>
                 </tr>
               ))}
 
               {productStockSummary.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="empty-detail">
+                  <td colSpan={9} className="empty-detail">
                     No hay productos registrados.
                   </td>
                 </tr>
@@ -703,125 +851,129 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
 
       {planBuilderOpen && (
         <div className="modal-overlay">
-          <div className="modal-card plan-builder-modal">
-            <h4>Armar plan de compra</h4>
-            <p className="payment-helper">
-              Las recomendaciones del sistema se muestran siempre y podés aceptarlas o no.
-            </p>
-
-            <div style={{ marginTop: 10 }}>
-              <h4 style={{ marginBottom: 8 }}>Recomendaciones del programa</h4>
-              <div className="table-wrap">
-                <table className="products-table">
-                  <thead>
-                    <tr>
-                      <th>Incluir</th>
-                      <th>Producto</th>
-                      <th>Faltante</th>
-                      <th>Sugerido</th>
-                      <th>Costo estimado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recommendedPlanRows.map((row) => (
-                      <tr key={`recommended-${row.productId}`}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={recommendedSelectionById[row.productId] !== false}
-                            onChange={(event) =>
-                              setRecommendedSelectionById((prev) => ({
-                                ...prev,
-                                [row.productId]: event.target.checked,
-                              }))
-                            }
-                          />
-                        </td>
-                        <td>{row.productName}</td>
-                        <td>{row.faltante}</td>
-                        <td>{row.sugeridoComprar}</td>
-                        <td>{formatCurrency(row.costoEstimado)}</td>
-                      </tr>
-                    ))}
-                    {recommendedPlanRows.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="empty-detail">
-                          No hay recomendaciones automáticas disponibles.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+          <div className="modal-card plan-builder-modal" style={modalContainerStyle}>
+            <div>
+              <h4>Armar plan de compra</h4>
+              <p className="payment-helper">
+                Las recomendaciones del sistema se muestran siempre y podés aceptarlas o no.
+              </p>
             </div>
 
-            <div style={{ marginTop: 12 }}>
-              <h4 style={{ marginBottom: 8 }}>Listado armado por cliente</h4>
-              <div className="adjustment-grid">
-                {manualPlanRows.map((row, index) => (
-                  <div key={`manual-plan-${index}`} className="plan-builder-manual-row">
-                    <select
-                      value={row.mode}
-                      onChange={(event) => handleManualPlanRowChange(index, 'mode', event.target.value)}
-                    >
-                      <option value="existing">Producto existente</option>
-                      <option value="new">Producto nuevo</option>
-                    </select>
-
-                    {row.mode === 'existing' ? (
-                      <select
-                        value={row.productId}
-                        onChange={(event) => handleManualPlanRowChange(index, 'productId', event.target.value)}
-                      >
-                        <option value="">Seleccionar producto</option>
-                        {safeProducts.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={row.customName}
-                        onChange={(event) => handleManualPlanRowChange(index, 'customName', event.target.value)}
-                        placeholder="Nombre del producto nuevo"
-                      />
-                    )}
-
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={row.quantity}
-                      onChange={(event) => handleManualPlanRowChange(index, 'quantity', event.target.value)}
-                      placeholder="Cantidad"
-                    />
-
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={row.unitCost}
-                      onChange={(event) => handleManualPlanRowChange(index, 'unitCost', event.target.value)}
-                      placeholder="Costo unit. (opcional)"
-                    />
-
-                    <button
-                      type="button"
-                      className="danger-ghost-btn"
-                      onClick={() => handleRemoveManualPlanRow(index)}
-                    >
-                      Quitar
-                    </button>
-                  </div>
-                ))}
+            <div style={modalBodyStyle}>
+              <div style={{ marginTop: 10 }}>
+                <h4 style={{ marginBottom: 8 }}>Recomendaciones del programa</h4>
+                <div className="table-wrap">
+                  <table className="products-table">
+                    <thead>
+                      <tr>
+                        <th>Incluir</th>
+                        <th>Producto</th>
+                        <th>Faltante</th>
+                        <th>Sugerido</th>
+                        <th>Costo estimado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recommendedPlanRows.map((row) => (
+                        <tr key={`recommended-${row.productId}`}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={recommendedSelectionById[row.productId] !== false}
+                              onChange={(event) =>
+                                setRecommendedSelectionById((prev) => ({
+                                  ...prev,
+                                  [row.productId]: event.target.checked,
+                                }))
+                              }
+                            />
+                          </td>
+                          <td>{row.productName}</td>
+                          <td>{row.faltante}</td>
+                          <td>{row.sugeridoComprar}</td>
+                          <td>{formatCurrency(row.costoEstimado)}</td>
+                        </tr>
+                      ))}
+                      {recommendedPlanRows.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="empty-detail">
+                            No hay recomendaciones automáticas disponibles.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
-              <div className="product-actions" style={{ marginTop: 10 }}>
-                <button type="button" className="secondary-btn" onClick={handleAddManualPlanRow}>
-                  + Agregar producto manual
-                </button>
+              <div style={{ marginTop: 12 }}>
+                <h4 style={{ marginBottom: 8 }}>Listado armado por cliente</h4>
+                <div className="adjustment-grid">
+                  {manualPlanRows.map((row, index) => (
+                    <div key={`manual-plan-${index}`} className="plan-builder-manual-row">
+                      <select
+                        value={row.mode}
+                        onChange={(event) => handleManualPlanRowChange(index, 'mode', event.target.value)}
+                      >
+                        <option value="existing">Producto existente</option>
+                        <option value="new">Producto nuevo</option>
+                      </select>
+
+                      {row.mode === 'existing' ? (
+                        <select
+                          value={row.productId}
+                          onChange={(event) => handleManualPlanRowChange(index, 'productId', event.target.value)}
+                        >
+                          <option value="">Seleccionar producto</option>
+                          {safeProducts.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={row.customName}
+                          onChange={(event) => handleManualPlanRowChange(index, 'customName', event.target.value)}
+                          placeholder="Nombre del producto nuevo"
+                        />
+                      )}
+
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={row.quantity}
+                        onChange={(event) => handleManualPlanRowChange(index, 'quantity', event.target.value)}
+                        placeholder="Cantidad"
+                      />
+
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={row.unitCost}
+                        onChange={(event) => handleManualPlanRowChange(index, 'unitCost', event.target.value)}
+                        placeholder="Costo unit. (opcional)"
+                      />
+
+                      <button
+                        type="button"
+                        className="danger-ghost-btn"
+                        onClick={() => handleRemoveManualPlanRow(index)}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="product-actions" style={{ marginTop: 10 }}>
+                  <button type="button" className="secondary-btn" onClick={handleAddManualPlanRow}>
+                    + Agregar producto manual
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -843,12 +995,15 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
 
       {costModalOpen && (
         <div className="modal-overlay">
-          <div className="modal-card">
-            <h4>Completar costos faltantes</h4>
-            <p className="payment-helper">
-              Se necesita costo unitario para generar el plan de compra acumulado.
-            </p>
-            <div className="adjustment-grid" style={{ marginTop: 10 }}>
+          <div className="modal-card" style={modalContainerStyle}>
+            <div>
+              <h4>Completar costos faltantes</h4>
+              <p className="payment-helper">
+                Se necesita costo unitario para generar el plan de compra acumulado.
+              </p>
+            </div>
+
+            <div className="adjustment-grid" style={{ ...modalBodyStyle, marginTop: 10 }}>
               {pendingPlanRows
                 .filter((row) => !(Number(row.unitCost || 0) > 0))
                 .map((row) => (

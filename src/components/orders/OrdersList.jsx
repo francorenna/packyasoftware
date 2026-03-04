@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { APP_CONFIG } from '../../config/app'
 import { getOrderFinancialSummary } from '../../utils/finance'
 import { generateOrderPDF } from '../../utils/pdf'
+import ConfirmDeliveryModal from './ConfirmDeliveryModal'
 
 const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
@@ -21,6 +22,16 @@ const createEditableItem = (item = {}) => ({
 })
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
+
+const getClientDebtKey = (order) => {
+  const clientId = String(order?.clientId ?? '').trim()
+  if (clientId) return `id:${clientId}`
+
+  const clientNameKey = String(order?.clientName ?? order?.client ?? '').trim().toLowerCase()
+  if (clientNameKey) return `name:${clientNameKey}`
+
+  return ''
+}
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -71,6 +82,7 @@ function OrdersList({
   onUpdateOrderDelivery,
   onUpdateOrderClient,
   onUpdateOrderItems,
+  onDeleteCancelledOrder,
   forcedOpenOrderId,
 }) {
   const [expandedOrderId, setExpandedOrderId] = useState(null)
@@ -78,6 +90,13 @@ function OrdersList({
   const [deliveryDrafts, setDeliveryDrafts] = useState({})
   const [itemsDrafts, setItemsDrafts] = useState({})
   const [deliverySaveUiByOrder, setDeliverySaveUiByOrder] = useState({})
+  const [deliveryConfirmModal, setDeliveryConfirmModal] = useState({
+    isOpen: false,
+    orderId: '',
+    initialDeliveryType: '',
+    initialDeliveredBy: '',
+    initialDeliveryNote: '',
+  })
   const safeOrders = Array.isArray(orders) ? orders : []
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
@@ -117,6 +136,26 @@ function OrdersList({
       }, {}),
     [safeProducts],
   )
+
+  const clientsWithDebt = (() => {
+    const debtByClientKey = safeOrders.reduce((acc, order) => {
+      if (order?.isSample) return acc
+      if (String(order?.status ?? '') === 'Cancelado') return acc
+
+      const clientKey = getClientDebtKey(order)
+      if (!clientKey) return acc
+
+      const { remainingDebt } = getOrderFinancialSummary(order)
+      if (remainingDebt <= 0) return acc
+
+      acc[clientKey] = (acc[clientKey] ?? 0) + Number(remainingDebt || 0)
+      return acc
+    }, {})
+
+    return new Set(
+      Object.keys(debtByClientKey).filter((clientKey) => Number(debtByClientKey[clientKey] || 0) > 0),
+    )
+  })()
 
   const productIdByName = useMemo(
     () =>
@@ -262,6 +301,7 @@ function OrdersList({
               const orderId = String(order.id ?? `pedido-${index}`)
               const orderClient = String(order.clientName ?? order.client ?? 'Sin cliente')
               const orderStatus = String(order.status ?? 'Pendiente')
+              const financialNote = String(order.financialNote ?? '').trim()
               const statusClass = `status-${orderStatus.toLowerCase().replace(/\s+/g, '-')}`
               const {
                 items,
@@ -287,6 +327,8 @@ function OrdersList({
                 : statusClass
               const statusOptions = order.isSample ? sampleOrderStatuses : orderStatuses
               const selectedClientId = String(order?.clientId ?? '')
+              const clientDebtKey = getClientDebtKey(order)
+              const hasClientDebt = clientDebtKey ? clientsWithDebt.has(clientDebtKey) : false
               const resolvedClientByName = clientsByName[
                 String(order?.clientName ?? order?.client ?? '').trim().toLowerCase()
               ]
@@ -562,15 +604,35 @@ function OrdersList({
                   return
                 }
 
-                const hasDeliveryType = String(order?.deliveredVia ?? '').trim().length > 0
-                const hasDeliveredBy = String(order?.deliveredBy ?? '').trim().length > 0
+                setDeliveryConfirmModal({
+                  isOpen: true,
+                  orderId,
+                  initialDeliveryType: String(order?.deliveryType ?? order?.deliveredVia ?? '').trim(),
+                  initialDeliveredBy: String(order?.deliveredBy ?? '').trim(),
+                  initialDeliveryNote: String(order?.deliveryNote ?? order?.deliveryDetails ?? '').trim(),
+                })
+              }
 
-                if (!hasDeliveryType || !hasDeliveredBy) {
-                  window.alert('Debe completar los datos de entrega antes de marcar como Entregado.')
-                  return
-                }
+              const handleCancelDeliveryConfirmation = () => {
+                setDeliveryConfirmModal((prev) => ({
+                  ...prev,
+                  isOpen: false,
+                  orderId: '',
+                }))
+              }
 
-                onUpdateOrderStatus?.(orderId, nextStatus)
+              const handleConfirmDeliveredStatus = (deliveryData) => {
+                const safeDeliveryData = deliveryData && typeof deliveryData === 'object' ? deliveryData : {}
+
+                onUpdateOrderDelivery?.(orderId, {
+                  deliveryType: String(safeDeliveryData.deliveryType ?? '').trim(),
+                  deliveredVia: String(safeDeliveryData.deliveryType ?? '').trim(),
+                  deliveredBy: String(safeDeliveryData.deliveredBy ?? '').trim(),
+                  deliveryNote: String(safeDeliveryData.deliveryNote ?? '').trim(),
+                  deliveryDetails: String(safeDeliveryData.deliveryNote ?? '').trim(),
+                })
+                onUpdateOrderStatus?.(orderId, 'Entregado')
+                handleCancelDeliveryConfirmation()
               }
 
               const handleUpdateOrderClient = (nextClientId) => {
@@ -589,6 +651,15 @@ function OrdersList({
                 })
               }
 
+              const handleDeleteCancelledOrder = () => {
+                if (orderStatus !== 'Cancelado') return
+
+                const confirmed = window.confirm('¿Desea eliminar definitivamente este pedido cancelado?')
+                if (!confirmed) return
+
+                onDeleteCancelledOrder?.(orderId)
+              }
+
               return (
                 <Fragment key={orderId}>
                   <tr
@@ -596,7 +667,12 @@ function OrdersList({
                     onClick={() => toggleOrder(orderId)}
                   >
                     <td>{orderId}</td>
-                    <td>{orderClient}</td>
+                    <td>
+                      <div className="order-client-cell">
+                        <span>{orderClient}</span>
+                        {hasClientDebt && <span className="client-debt-badge">⚠ Cliente con deuda</span>}
+                      </div>
+                    </td>
                     <td>{formatDate(order.deliveryDate)}</td>
                     <td>
                       <div className="order-status-cell">
@@ -760,6 +836,15 @@ function OrdersList({
                                 </select>
                               </strong>
                             </p>
+                            {deliveryConfirmModal.isOpen && deliveryConfirmModal.orderId === orderId && (
+                              <ConfirmDeliveryModal
+                                initialDeliveryType={deliveryConfirmModal.initialDeliveryType}
+                                initialDeliveredBy={deliveryConfirmModal.initialDeliveredBy}
+                                initialDeliveryNote={deliveryConfirmModal.initialDeliveryNote}
+                                onConfirm={handleConfirmDeliveredStatus}
+                                onCancel={handleCancelDeliveryConfirmation}
+                              />
+                            )}
                             {!order.isSample && (
                               <p>
                                 <span>Cliente</span>
@@ -802,13 +887,19 @@ function OrdersList({
                                   <span>Total final</span>
                                   <strong>{formatCurrency(finalTotal)}</strong>
                                 </p>
+                                {financialNote && (
+                                  <p>
+                                    <span>Observación financiera</span>
+                                    <strong>{financialNote}</strong>
+                                  </p>
+                                )}
                               </>
                             )}
                           </div>
 
                           {!order.isSample && (
                             <div className="profitability-card">
-                              <h4>Rentabilidad estimada</h4>
+                              <h4>Rentabilidad estimada (sobre facturado)</h4>
                               <p>
                                 <span>Costo estimado</span>
                                 <strong>{formatCurrency(estimatedCost)}</strong>
@@ -961,6 +1052,15 @@ function OrdersList({
                             >
                               📲 Enviar por WhatsApp
                             </button>
+                            {orderStatus === 'Cancelado' && (
+                              <button
+                                type="button"
+                                className="danger-ghost-btn"
+                                onClick={handleDeleteCancelledOrder}
+                              >
+                                ❌ Eliminar definitivamente
+                              </button>
+                            )}
                           </div>
 
                           {!order.isSample && (

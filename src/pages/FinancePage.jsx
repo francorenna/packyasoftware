@@ -5,6 +5,9 @@ import {
   getMonthlyFinanceMovements,
 } from '../utils/finance'
 import { buildMonthlyProfit } from '../utils/profit'
+import { getMonthlyProductionClosure } from '../utils/production'
+
+const expenseCategories = ['Servicios', 'Transporte', 'Impuestos', 'Sueldos', 'Mantenimiento', 'Otros']
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -37,18 +40,63 @@ const formatPercent = (value) => {
   })}%`
 }
 
-function FinancePage({ orders, purchases, products }) {
+const getTodayDateKey = () => {
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function FinancePage({
+  orders,
+  purchases,
+  products,
+  expenses,
+  onAddExpense,
+  onDeleteExpense,
+  getMonthlyExpenses,
+}) {
   const [selectedMonth, setSelectedMonth] = useState(() => getCurrentMonthKey())
   const [movementFilter, setMovementFilter] = useState('Todos')
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false)
+  const [expenseForm, setExpenseForm] = useState(() => ({
+    amount: '',
+    category: expenseCategories[0],
+    description: '',
+    date: getTodayDateKey(),
+    note: '',
+  }))
+  const [expenseFormError, setExpenseFormError] = useState('')
+
+  const [selectedYear, selectedMonthNumber] = useMemo(() => {
+    const [year, month] = String(selectedMonth ?? '').split('-')
+    return [Number(year), Number(month)]
+  }, [selectedMonth])
+
+  const monthlyExpenses = useMemo(() => {
+    if (typeof getMonthlyExpenses === 'function') {
+      return getMonthlyExpenses(selectedMonthNumber, selectedYear)
+    }
+
+    const safeExpenses = Array.isArray(expenses) ? expenses : []
+    return safeExpenses.filter((expense) => String(expense?.date ?? '').slice(0, 7) === selectedMonth)
+  }, [expenses, getMonthlyExpenses, selectedMonth, selectedMonthNumber, selectedYear])
+
+  const totalMonthlyExpenses = useMemo(
+    () => monthlyExpenses.reduce((acc, expense) => acc + Number(expense?.amount || 0), 0),
+    [monthlyExpenses],
+  )
 
   const summary = useMemo(
     () =>
       calculateFinanceSummary({
         orders,
         purchases,
+        expenses,
         monthKey: selectedMonth,
       }),
-    [orders, purchases, selectedMonth],
+    [orders, purchases, expenses, selectedMonth],
   )
 
   const monthlyMovements = useMemo(
@@ -56,9 +104,10 @@ function FinancePage({ orders, purchases, products }) {
       getMonthlyFinanceMovements({
         orders,
         purchases,
+        expenses,
         monthKey: selectedMonth,
       }),
-    [orders, purchases, selectedMonth],
+    [orders, purchases, expenses, selectedMonth],
   )
 
   const visibleMovements = useMemo(() => {
@@ -76,6 +125,17 @@ function FinancePage({ orders, purchases, products }) {
     [orders, purchases, selectedMonth, products],
   )
 
+  const monthlyProduction = useMemo(
+    () => getMonthlyProductionClosure(orders, selectedMonth),
+    [orders, selectedMonth],
+  )
+
+  const averageTicket = useMemo(() => {
+    const completedJobs = Number(monthlyProduction.completedJobs || 0)
+    if (completedJobs <= 0) return 0
+    return Number(summary.monthlyInvoiced || 0) / completedJobs
+  }, [monthlyProduction.completedJobs, summary.monthlyInvoiced])
+
   const topProducts = useMemo(
     () =>
       Object.values(monthlyProfit.productProfitMap).sort(
@@ -83,6 +143,59 @@ function FinancePage({ orders, purchases, products }) {
       ),
     [monthlyProfit],
   )
+
+  const openExpenseModal = () => {
+    setExpenseForm({
+      amount: '',
+      category: expenseCategories[0],
+      description: '',
+      date: getTodayDateKey(),
+      note: '',
+    })
+    setExpenseFormError('')
+    setIsExpenseModalOpen(true)
+  }
+
+  const closeExpenseModal = () => {
+    setIsExpenseModalOpen(false)
+    setExpenseFormError('')
+  }
+
+  const handleSaveExpense = () => {
+    const normalizedAmount = Number(expenseForm.amount)
+    const normalizedDescription = String(expenseForm.description ?? '').trim()
+    const normalizedDate = String(expenseForm.date ?? '').trim()
+
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      setExpenseFormError('Ingresá un monto válido mayor a 0.')
+      return
+    }
+
+    if (!normalizedDescription) {
+      setExpenseFormError('Completá una descripción para el egreso.')
+      return
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+      setExpenseFormError('Seleccioná una fecha válida.')
+      return
+    }
+
+    const savedExpense = onAddExpense?.({
+      amount: normalizedAmount,
+      category: String(expenseForm.category ?? expenseCategories[0]).trim(),
+      description: normalizedDescription,
+      date: normalizedDate,
+      note: String(expenseForm.note ?? '').trim(),
+    })
+
+    if (!savedExpense) {
+      setExpenseFormError('No se pudo guardar el egreso. Revisá los datos cargados.')
+      return
+    }
+
+    closeExpenseModal()
+  }
 
   return (
     <section className="page-section">
@@ -115,8 +228,11 @@ function FinancePage({ orders, purchases, products }) {
           </article>
 
           <article className="dashboard-card">
-            <p>Total invertido hoy</p>
-            <strong>{formatCurrency(summary.dailyInvested)}</strong>
+            <p>Total egresado hoy</p>
+            <strong>{formatCurrency(summary.dailyOutflow)}</strong>
+            <span className="muted-label">
+              Compras: {formatCurrency(summary.dailyInvested)} · Egresos manuales: {formatCurrency(summary.dailyManualExpenses)}
+            </span>
           </article>
 
           <article className="dashboard-card">
@@ -132,6 +248,9 @@ function FinancePage({ orders, purchases, products }) {
         <div className="card-head">
           <h3>Resumen mensual</h3>
         </div>
+        <p className="payment-helper">
+          Facturación del mes (pedidos entregados) · Cobrado real del mes · Resultado caja real
+        </p>
 
         <div className="dashboard-grid">
           <article className="dashboard-card">
@@ -160,6 +279,65 @@ function FinancePage({ orders, purchases, products }) {
 
       <section className="dashboard-recent">
         <div className="card-head">
+          <h3>💸 Egresos del mes</h3>
+          <button type="button" className="primary-btn" onClick={openExpenseModal}>
+            + Nuevo egreso
+          </button>
+        </div>
+
+        <div className="dashboard-grid">
+          <article className="dashboard-card">
+            <p>Total egresado del mes</p>
+            <strong className="finance-result-negative">{formatCurrency(totalMonthlyExpenses)}</strong>
+          </article>
+        </div>
+
+        <div className="table-wrap">
+          <table className="dashboard-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Categoría</th>
+                <th>Descripción</th>
+                <th>Observación</th>
+                <th>Monto</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyExpenses.map((expense) => (
+                <tr key={expense.id}>
+                  <td>{formatDateTime(expense.date)}</td>
+                  <td>{expense.category}</td>
+                  <td>{expense.description}</td>
+                  <td>{expense.note || '—'}</td>
+                  <td className="finance-result-negative">{formatCurrency(Number(expense.amount || 0))}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => onDeleteExpense?.(expense.id)}
+                    >
+                      Eliminar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+              {monthlyExpenses.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-detail">
+                    No hay egresos manuales registrados para el mes seleccionado.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="dashboard-recent">
+        <div className="card-head">
           <h3>Rentabilidad real del mes</h3>
         </div>
 
@@ -179,8 +357,8 @@ function FinancePage({ orders, purchases, products }) {
 
           <article className="dashboard-card">
             <p>Ganancia bruta</p>
-            <strong className={resultClassName(monthlyProfit.totalProfit)}>
-              {formatCurrency(monthlyProfit.totalProfit)}
+            <strong className={resultClassName(monthlyProfit.totalProfit - totalMonthlyExpenses)}>
+              {formatCurrency(monthlyProfit.totalProfit - totalMonthlyExpenses)}
             </strong>
           </article>
 
@@ -234,6 +412,63 @@ function FinancePage({ orders, purchases, products }) {
 
       <section className="dashboard-recent">
         <div className="card-head">
+          <h3>📅 CIERRE MENSUAL</h3>
+        </div>
+
+        <div className="dashboard-grid">
+          <article className="dashboard-card">
+            <p>Cajas producidas</p>
+            <strong>{String(monthlyProduction.producedBoxes)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Trabajos realizados</p>
+            <strong>{String(monthlyProduction.completedJobs)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Muestras</p>
+            <strong>{String(monthlyProduction.samples)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Total facturado</p>
+            <strong>{formatCurrency(summary.monthlyInvoiced)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Total cobrado</p>
+            <strong>{formatCurrency(summary.monthlyCollected)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Total invertido</p>
+            <strong>{formatCurrency(summary.monthlyInvested)}</strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Ganancia neta</p>
+            <strong className={resultClassName(summary.monthlyNet)}>
+              {formatCurrency(summary.monthlyNet)}
+            </strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Margen promedio</p>
+            <strong className={resultClassName(monthlyProfit.marginPercent)}>
+              {formatPercent(monthlyProfit.marginPercent)}
+            </strong>
+          </article>
+
+          <article className="dashboard-card">
+            <p>Ticket promedio</p>
+            <strong>{formatCurrency(averageTicket)}</strong>
+          </article>
+        </div>
+      </section>
+
+      <section className="dashboard-recent">
+        <div className="card-head">
           <h3>Movimientos financieros del mes</h3>
           <label className="finance-filter">
             <span>Filtrar</span>
@@ -256,6 +491,7 @@ function FinancePage({ orders, purchases, products }) {
                 <th>Fecha</th>
                 <th>Tipo</th>
                 <th>Concepto</th>
+                <th>Categoría</th>
                 <th>Monto</th>
               </tr>
             </thead>
@@ -265,6 +501,7 @@ function FinancePage({ orders, purchases, products }) {
                   <td>{formatDateTime(movement.date)}</td>
                   <td>{movement.type}</td>
                   <td>{movement.concept}</td>
+                  <td>{String(movement.category ?? '').trim() || '—'}</td>
                   <td
                     className={
                       movement.type === 'Ingreso'
@@ -279,7 +516,7 @@ function FinancePage({ orders, purchases, products }) {
 
               {visibleMovements.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="empty-detail">
+                  <td colSpan={5} className="empty-detail">
                     No hay movimientos para el filtro seleccionado.
                   </td>
                 </tr>
@@ -288,6 +525,94 @@ function FinancePage({ orders, purchases, products }) {
           </table>
         </div>
       </section>
+
+      {isExpenseModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <h4>Nuevo egreso</h4>
+
+            <div className="adjustment-grid" style={{ marginTop: 12 }}>
+              <label>
+                Monto
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={expenseForm.amount}
+                  onChange={(event) =>
+                    setExpenseForm((prev) => ({ ...prev, amount: event.target.value }))
+                  }
+                  placeholder="0"
+                  required
+                />
+              </label>
+
+              <label>
+                Categoría
+                <select
+                  value={expenseForm.category}
+                  onChange={(event) =>
+                    setExpenseForm((prev) => ({ ...prev, category: event.target.value }))
+                  }
+                >
+                  {expenseCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Descripción
+                <input
+                  type="text"
+                  value={expenseForm.description}
+                  onChange={(event) =>
+                    setExpenseForm((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  placeholder="Descripción del egreso"
+                  required
+                />
+              </label>
+
+              <label>
+                Fecha
+                <input
+                  type="date"
+                  value={expenseForm.date}
+                  onChange={(event) =>
+                    setExpenseForm((prev) => ({ ...prev, date: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                Observación
+                <textarea
+                  rows={3}
+                  value={expenseForm.note}
+                  onChange={(event) =>
+                    setExpenseForm((prev) => ({ ...prev, note: event.target.value }))
+                  }
+                  placeholder="Observación opcional"
+                />
+              </label>
+
+              {expenseFormError && <p className="payment-error">{expenseFormError}</p>}
+
+              <div className="product-actions">
+                <button type="button" className="secondary-btn" onClick={closeExpenseModal}>
+                  Cancelar
+                </button>
+                <button type="button" className="primary-btn" onClick={handleSaveExpense}>
+                  Guardar egreso
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

@@ -33,6 +33,26 @@ const createSupplierForm = () => ({
   notes: '',
 })
 
+const purchaseFormContainerStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  overflowY: 'auto',
+  maxHeight: 'calc(100vh - 220px)',
+}
+
+const purchaseItemsStackStyle = {
+  maxHeight: '60vh',
+  overflowY: 'auto',
+  paddingRight: '0.25rem',
+}
+
+const purchaseActionAreaStyle = {
+  position: 'sticky',
+  bottom: 0,
+  background: '#ffffff',
+  paddingTop: '0.65rem',
+}
+
 function PurchasesPage({
   products,
   purchases,
@@ -202,7 +222,7 @@ function PurchasesPage({
       </header>
 
       <div className="products-grid">
-        <section className="card-block">
+        <section className="card-block" style={purchaseFormContainerStyle}>
           <div className="card-head">
             <h3>Nueva compra</h3>
           </div>
@@ -231,7 +251,7 @@ function PurchasesPage({
               </button>
             </div>
 
-            <div className="items-stack">
+            <div className="items-stack" style={purchaseItemsStackStyle}>
               {items.map((item, index) => (
                 <div key={`purchase-item-${index}`} className="purchase-item-row">
                   <select
@@ -291,16 +311,18 @@ function PurchasesPage({
               </select>
             </label>
 
-            <div className="totals-box">
-              <p>
-                <span>Total compra</span>
-                <strong>{formatCurrency(purchaseTotal)}</strong>
-              </p>
-            </div>
+            <div style={purchaseActionAreaStyle}>
+              <div className="totals-box">
+                <p>
+                  <span>Total compra</span>
+                  <strong>{formatCurrency(purchaseTotal)}</strong>
+                </p>
+              </div>
 
-            <button type="submit" className="primary-btn">
-              Registrar compra
-            </button>
+              <button type="submit" className="primary-btn">
+                Registrar compra
+              </button>
+            </div>
           </form>
         </section>
 

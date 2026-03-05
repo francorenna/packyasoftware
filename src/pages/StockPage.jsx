@@ -648,7 +648,7 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Stock</h2>
+        <h2 className="section-title">Stock</h2>
         <p>Control de inventario y movimientos.</p>
       </header>
 

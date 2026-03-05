@@ -200,7 +200,7 @@ function FinancePage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Finanzas</h2>
+        <h2 className="section-title">Finanzas</h2>
         <p>Control de caja diaria y seguimiento financiero mensual.</p>
       </header>
 

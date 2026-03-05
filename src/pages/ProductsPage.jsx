@@ -58,6 +58,20 @@ const categoryTitles = {
   OTRO: 'OTROS',
 }
 
+const categoryIcons = {
+  CAJA: '📦',
+  BOLSA: '🛍',
+  EMBALAJE: '🚚',
+  OTRO: '⚙️',
+}
+
+const categoryClassNames = {
+  CAJA: 'category-caja',
+  BOLSA: 'category-bolsa',
+  EMBALAJE: 'category-embalaje',
+  OTRO: 'category-otro',
+}
+
 function ProductsPage({
   products,
   orders,
@@ -261,7 +275,7 @@ function ProductsPage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Productos</h2>
+        <h2 className="section-title">Productos</h2>
         <p>Gestioná catálogo y stock base para reservas dinámicas en pedidos.</p>
       </header>
 
@@ -377,7 +391,15 @@ function ProductsPage({
                                 onChange={(event) => updateQuickDraft(product.id, 'name', event.target.value)}
                               />
                             ) : (
-                              product.name
+                              <span className="product-category-line">
+                                <span>{categoryIcons[getCategoryFromProduct(product)] ?? '⚙️'}</span>
+                                <span
+                                  className={`category-badge ${categoryClassNames[getCategoryFromProduct(product)] ?? 'category-otro'}`}
+                                >
+                                  {getCategoryFromProduct(product)}
+                                </span>
+                                <span>{product.name}</span>
+                              </span>
                             )}
                           </td>
                           <td>{getProductMeasure(isEditing ? draft.name : product.name)}</td>

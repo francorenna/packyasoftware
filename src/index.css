@@ -205,6 +205,13 @@ textarea {
   font-size: 1.5rem;
 }
 
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  letter-spacing: 0.3px;
+}
+
 .page-header p {
   margin: 0.45rem 0 0;
   color: #64748b;
@@ -369,6 +376,21 @@ textarea {
   font-weight: 600;
 }
 
+.table-header,
+.dashboard-table thead th,
+.products-table thead th,
+.orders-table thead th {
+  font-weight: 600;
+  color: #444;
+}
+
+.table-row:hover,
+.dashboard-table tbody tr:hover,
+.products-table tbody tr:hover,
+.orders-table tbody tr:hover {
+  background: #f7f7f7;
+}
+
 .product-actions {
   display: flex;
   justify-content: flex-end;
@@ -412,6 +434,51 @@ textarea {
   border: 1px solid #e2e8f0;
   border-radius: 0.85rem;
   padding: 1rem;
+}
+
+.panel-card,
+.card-block,
+.dashboard-card,
+.dashboard-recent {
+  border-radius: 10px;
+  border: 1px solid #ececec;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.category-badge {
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.category-caja {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.category-bolsa {
+  background: #d4edda;
+  color: #155724;
+}
+
+.category-embalaje {
+  background: #ffe5d0;
+  color: #8a3b00;
+}
+
+.category-otro {
+  background: #e2e3e5;
+  color: #383d41;
+}
+
+.product-category-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .card-head {

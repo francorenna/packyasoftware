@@ -108,7 +108,7 @@ function OrdersPage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Pedidos</h2>
+        <h2 className="section-title">Pedidos</h2>
         <p>Gestioná pedidos con múltiples productos y seguimiento por estado.</p>
       </header>
 

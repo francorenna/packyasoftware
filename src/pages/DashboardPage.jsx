@@ -163,7 +163,7 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Dashboard</h2>
+        <h2 className="section-title">Dashboard</h2>
         <p>Resumen ejecutivo en tiempo real basado en los pedidos registrados.</p>
       </header>
 

@@ -231,7 +231,7 @@ function PurchasesPage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Compras</h2>
+        <h2 className="section-title">Compras</h2>
         <p>Registrá compras con proveedor obligatorio y reposición automática de stock.</p>
       </header>
 

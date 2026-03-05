@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { APP_CONFIG } from '../../config/app'
 import { getOrderFinancialSummary } from '../../utils/finance'
 import { generateOrderPDF } from '../../utils/pdf'
@@ -105,6 +105,11 @@ function OrdersList({
     () => (forcedOpenOrderId ? String(forcedOpenOrderId) : null),
     [forcedOpenOrderId],
   )
+
+  useEffect(() => {
+    if (!safeForcedOpenOrderId) return
+    setExpandedOrderId(safeForcedOpenOrderId)
+  }, [safeForcedOpenOrderId])
 
   const clientsById = useMemo(
     () =>
@@ -335,7 +340,7 @@ function OrdersList({
               const selectedClientIdForSelect =
                 selectedClientId || String(resolvedClientByName?.id ?? '')
 
-              const isExpanded = expandedOrderId === orderId || safeForcedOpenOrderId === orderId
+              const isExpanded = expandedOrderId === orderId
               const isForcedOpened = safeForcedOpenOrderId === orderId
               const paymentDraft = getDraftForOrder(orderId)
               const deliveryDraft = getDeliveryDraftForOrder(order)

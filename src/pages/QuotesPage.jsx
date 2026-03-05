@@ -64,6 +64,20 @@ function QuotesPage({
   const safeClients = Array.isArray(clients) ? clients : []
   const safeProducts = Array.isArray(products) ? products : []
   const safeQuotes = Array.isArray(quotes) ? quotes : []
+  const sortedClients = useMemo(
+    () =>
+      (Array.isArray(clients) ? clients : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [clients],
+  )
+  const sortedProducts = useMemo(
+    () =>
+      (Array.isArray(products) ? products : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [products],
+  )
 
   const productById = useMemo(
     () =>
@@ -461,7 +475,7 @@ function QuotesPage({
                 disabled={useManualClient}
               >
                 <option value="">Sin cliente seleccionado</option>
-                {safeClients.map((client) => (
+                {sortedClients.map((client) => (
                   <option key={client.id} value={client.id}>
                     {client.name}
                   </option>
@@ -518,7 +532,7 @@ function QuotesPage({
                       onChange={(event) => handleDraftItemChange(index, 'productId', event.target.value)}
                     >
                       <option value="">Seleccionar producto</option>
-                      {safeProducts.map((product) => (
+                      {sortedProducts.map((product) => (
                         <option key={product.id} value={product.id}>
                           {product.name}
                         </option>
@@ -795,7 +809,7 @@ function QuotesPage({
                                         }
                                       >
                                         <option value="">Seleccionar producto</option>
-                                        {safeProducts.map((product) => (
+                                        {sortedProducts.map((product) => (
                                           <option key={product.id} value={product.id}>
                                             {product.name}
                                           </option>

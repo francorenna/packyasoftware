@@ -101,6 +101,20 @@ function OrdersList({
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeClients = Array.isArray(clients) ? clients : []
+  const sortedProducts = useMemo(
+    () =>
+      (Array.isArray(products) ? products : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [products],
+  )
+  const sortedClients = useMemo(
+    () =>
+      (Array.isArray(clients) ? clients : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [clients],
+  )
   const safeForcedOpenOrderId = useMemo(
     () => (forcedOpenOrderId ? String(forcedOpenOrderId) : null),
     [forcedOpenOrderId],
@@ -760,7 +774,7 @@ function OrdersList({
                                             }
                                           >
                                             <option value="">Seleccionar producto</option>
-                                            {safeProducts.map((product) => (
+                                            {sortedProducts.map((product) => (
                                               <option key={product.id} value={product.id}>
                                                 {product.name}
                                               </option>
@@ -860,7 +874,7 @@ function OrdersList({
                                     onChange={(event) => handleUpdateOrderClient(event.target.value)}
                                   >
                                     <option value="">Seleccionar cliente</option>
-                                    {safeClients.map((client) => (
+                                    {sortedClients.map((client) => (
                                       <option key={client.id} value={client.id}>
                                         {client.name}
                                       </option>

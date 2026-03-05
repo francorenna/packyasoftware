@@ -93,6 +93,20 @@ function OrdersForm({
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeClients = Array.isArray(clients) ? clients : []
+  const sortedClients = useMemo(
+    () =>
+      (Array.isArray(clients) ? clients : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [clients],
+  )
+  const sortedProducts = useMemo(
+    () =>
+      (Array.isArray(products) ? products : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [products],
+  )
   const safeStockByProductId = stockByProductId ?? {}
   const initialDraft = useMemo(() => readOrderDraftFromSessionStorage(), [])
   const shouldSkipDraftPersistRef = useRef(false)
@@ -420,7 +434,7 @@ function OrdersForm({
                 required
               >
                 <option value="">Seleccionar cliente</option>
-                {safeClients.map((client) => (
+                {sortedClients.map((client) => (
                   <option key={client.id} value={client.id}>
                     {client.name}
                   </option>
@@ -540,7 +554,7 @@ function OrdersForm({
                 required
               >
                 <option value="">Seleccionar producto</option>
-                {safeProducts.map((product) => (
+                {sortedProducts.map((product) => (
                   <option key={product.id} value={product.id}>
                     {product.name}
                   </option>

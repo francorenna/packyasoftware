@@ -56,6 +56,20 @@ function ManualPurchaseListsPage({
 
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
   const safeSuppliers = useMemo(() => (Array.isArray(suppliers) ? suppliers : []), [suppliers])
+  const sortedProducts = useMemo(
+    () =>
+      (Array.isArray(products) ? products : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [products],
+  )
+  const sortedSuppliers = useMemo(
+    () =>
+      (Array.isArray(suppliers) ? suppliers : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [suppliers],
+  )
   const safeLists = useMemo(
     () => (Array.isArray(manualPurchaseLists) ? manualPurchaseLists : []),
     [manualPurchaseLists],
@@ -272,7 +286,7 @@ function ManualPurchaseListsPage({
                   }}
                 >
                   <option value="">Seleccionar proveedor</option>
-                  {safeSuppliers.map((supplier) => (
+                  {sortedSuppliers.map((supplier) => (
                     <option key={supplier.id} value={supplier.id}>
                       {supplier.name}
                     </option>
@@ -346,7 +360,7 @@ function ManualPurchaseListsPage({
                       onChange={(event) => handleItemChange(index, 'productId', event.target.value)}
                     >
                       <option value="">Producto manual</option>
-                      {safeProducts.map((product) => (
+                      {sortedProducts.map((product) => (
                         <option key={product.id} value={product.id}>
                           {product.name}
                         </option>

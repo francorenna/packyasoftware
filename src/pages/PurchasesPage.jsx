@@ -77,6 +77,20 @@ function PurchasesPage({
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
+  const sortedSuppliers = useMemo(
+    () =>
+      (Array.isArray(suppliers) ? suppliers : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [suppliers],
+  )
+  const sortedProducts = useMemo(
+    () =>
+      (Array.isArray(products) ? products : []).toSorted((a, b) =>
+        String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
+      ),
+    [products],
+  )
 
   const productById = useMemo(
     () =>
@@ -236,7 +250,7 @@ function PurchasesPage({
                 required
               >
                 <option value="">Seleccionar proveedor</option>
-                {safeSuppliers.map((supplier) => (
+                {sortedSuppliers.map((supplier) => (
                   <option key={supplier.id} value={supplier.id}>
                     {supplier.name}
                   </option>
@@ -262,7 +276,7 @@ function PurchasesPage({
                     required
                   >
                     <option value="">Seleccionar producto</option>
-                    {safeProducts.map((product) => (
+                    {sortedProducts.map((product) => (
                       <option key={product.id} value={product.id}>
                         {product.name}
                       </option>

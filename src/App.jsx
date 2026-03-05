@@ -48,6 +48,7 @@ function App() {
   const {
     products,
     upsertProduct,
+    deleteProduct,
     adjustProductStock,
     registerOrderReturn,
     updateStock,
@@ -512,6 +513,7 @@ function App() {
                 products={products}
                 orders={orders}
                 onSaveProduct={upsertProduct}
+                onDeleteProduct={deleteProduct}
                 onUpdateProductReferenceCost={updateProductReferenceCost}
                 onAdjustStock={adjustProductStock}
               />

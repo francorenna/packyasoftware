@@ -75,6 +75,7 @@ function OrdersList({
   products,
   purchases,
   clients,
+  stockByProductId,
   deliveryFilter,
   onFilterChange,
   onRegisterPayment,
@@ -101,6 +102,7 @@ function OrdersList({
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeClients = Array.isArray(clients) ? clients : []
+  const safeStockByProductId = stockByProductId ?? {}
   const sortedProducts = useMemo(
     () =>
       (Array.isArray(products) ? products : []).toSorted((a, b) =>
@@ -361,6 +363,14 @@ function OrdersList({
               const deliverySaveUi = getDeliverySaveUiForOrder(orderId)
               const itemsDraft = itemsDrafts[orderId] ?? null
               const isEditingItems = Array.isArray(itemsDraft)
+              const draftReservedByProductId = (Array.isArray(itemsDraft) ? itemsDraft : []).reduce((acc, item) => {
+                const productId = String(item?.productId ?? '').trim()
+                if (!productId) return acc
+                if (item?.isClientMaterial) return acc
+
+                acc[productId] = (acc[productId] ?? 0) + toPositiveNumber(item?.quantity)
+                return acc
+              }, {})
               const estimatedCost = items.reduce((acc, item) => {
                 const fromItemId = String(item?.productId ?? '')
                 const fromName = productIdByName[
@@ -765,6 +775,19 @@ function OrdersList({
                                   <div className="order-items-edit-grid">
                                     {itemsDraft.map((item, itemIndex) => {
                                       const lineSubtotal = toPositiveNumber(item.quantity) * toPositiveNumber(item.unitPrice)
+                                      const draftProductId = String(item?.productId ?? '').trim()
+                                      const currentAvailable = Number(
+                                        safeStockByProductId[draftProductId]?.stockDisponible
+                                          ?? productsById[draftProductId]?.stockTotal
+                                          ?? 0,
+                                      )
+                                      const lineQuantity = toPositiveNumber(item?.quantity)
+                                      const reservedInDraft = draftReservedByProductId[draftProductId] ?? 0
+                                      const availableForLine = currentAvailable + lineQuantity - reservedInDraft
+                                      const exceedsStock =
+                                        draftProductId && !item?.isClientMaterial && lineQuantity > availableForLine
+                                      const safeAvailable = Math.max(availableForLine, 0)
+                                      const shortageUnits = Math.max(lineQuantity - safeAvailable, 0)
                                       return (
                                         <div key={`${orderId}-draft-item-${itemIndex}`} className="order-items-edit-row">
                                           <select
@@ -816,6 +839,14 @@ function OrdersList({
                                             />
                                             Material provisto por el cliente
                                           </label>
+                                          {exceedsStock && (
+                                            <p className="payment-error">
+                                              No hay stock suficiente para este pedido.<br />
+                                              Stock disponible: {safeAvailable}<br />
+                                              Pedido solicitado: {lineQuantity}<br />
+                                              Faltante estimado: {shortageUnits}
+                                            </p>
+                                          )}
                                         </div>
                                       )
                                     })}

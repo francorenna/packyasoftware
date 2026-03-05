@@ -84,14 +84,12 @@ const formatCurrency = (value) =>
 function OrdersForm({
   orderId,
   products,
-  purchases,
   clients,
   stockByProductId,
   onCreate,
   onCreateClient,
 }) {
   const safeProducts = Array.isArray(products) ? products : []
-  const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeClients = Array.isArray(clients) ? clients : []
   const sortedClients = useMemo(
     () =>
@@ -231,33 +229,6 @@ function OrdersForm({
       }, {}),
     [items],
   )
-
-  const averageUnitCostByProductId = useMemo(() => {
-    const totals = {}
-
-    safePurchases.forEach((purchase) => {
-      const purchaseItems = Array.isArray(purchase?.items) ? purchase.items : []
-      purchaseItems.forEach((item) => {
-        const productId = String(item?.productId ?? '')
-        if (!productId) return
-
-        const quantity = parsePositiveNumber(item?.quantity)
-        const unitCost = parsePositiveNumber(item?.unitCost)
-        if (quantity <= 0 || unitCost <= 0) return
-
-        const row = totals[productId] ?? { totalCost: 0, totalUnits: 0 }
-        row.totalCost += quantity * unitCost
-        row.totalUnits += quantity
-        totals[productId] = row
-      })
-    })
-
-    return Object.keys(totals).reduce((acc, productId) => {
-      const row = totals[productId]
-      acc[productId] = row.totalUnits > 0 ? row.totalCost / row.totalUnits : 0
-      return acc
-    }, {})
-  }, [safePurchases])
 
   const handleItemChange = (index, field, value) => {
     setItems((prevItems) =>
@@ -609,23 +580,16 @@ function OrdersForm({
 
                 if (!exceedsStock) return null
 
-                const shortageUnits = Math.max(lineQuantity - availableForLine, 1)
-                const suggestedUnits = Math.ceil(shortageUnits / 100) * 100
-                const suggestedPackages = Math.ceil(suggestedUnits / 100)
-                const averageUnitCost = Number(averageUnitCostByProductId[item.productId] ?? 0)
-                const referenceCost = Number(productById[item.productId]?.referenceCost ?? 0)
-                const estimatedUnitCost = averageUnitCost > 0 ? averageUnitCost : referenceCost
-                const estimatedCost = suggestedUnits * estimatedUnitCost
+                const safeAvailable = Math.max(availableForLine, 0)
+                const shortageUnits = Math.max(lineQuantity - safeAvailable, 0)
 
                 return (
-                  <>
-                    <p className="payment-error">
-                      Faltan {shortageUnits} unidades de este producto.
-                    </p>
-                    <p className="payment-error">
-                      Compra sugerida: {suggestedUnits} unidades ({suggestedPackages} paquetes de 100). Costo estimado: {formatCurrency(estimatedCost)}
-                    </p>
-                  </>
+                  <p className="payment-error">
+                    No hay stock suficiente para este pedido.<br />
+                    Stock disponible: {safeAvailable}<br />
+                    Pedido solicitado: {lineQuantity}<br />
+                    Faltante estimado: {shortageUnits}
+                  </p>
                 )
               })()}
             </div>

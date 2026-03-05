@@ -10,6 +10,7 @@ const ACTIVE_ORDER_STATUSES = new Set([
   'en proceso',
   'listo',
 ])
+const SHORTAGE_ACTIVE_STATUSES = new Set(['pendiente', 'en proceso', 'listo'])
 
 const formatDateTime = (value) => {
   const date = new Date(value)
@@ -224,6 +225,53 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
       }, {}),
     [productStockSummary],
   )
+
+  const shortageCalculatorRows = useMemo(() => {
+    const requiredByProductId = {}
+
+    safeOrders.forEach((order) => {
+      if (order?.isArchived === true) return
+
+      const status = String(order?.status ?? '').trim().toLowerCase()
+      if (!SHORTAGE_ACTIVE_STATUSES.has(status)) return
+
+      const orderItems = Array.isArray(order?.items) ? order.items : []
+      orderItems.forEach((item) => {
+        if (item?.isClientMaterial) return
+
+        const resolvedId =
+          String(item?.productId ?? '') ||
+          productIdByName[String(item?.productName ?? item?.product ?? '').trim().toLowerCase()] ||
+          ''
+        if (!resolvedId) return
+
+        const qty = Math.max(Number(item?.quantity || 0), 0)
+        if (qty <= 0) return
+
+        requiredByProductId[resolvedId] = (requiredByProductId[resolvedId] ?? 0) + qty
+      })
+    })
+
+    return safeProducts
+      .map((product) => {
+        const productId = String(product?.id ?? '')
+        const required = Number(requiredByProductId[productId] || 0)
+        const stock = Number(stockByProductId[productId] || 0)
+        const missing = Math.max(required - stock, 0)
+
+        return {
+          productId,
+          productName: String(product?.name ?? 'Sin producto'),
+          required,
+          stock,
+          missing,
+        }
+      })
+      .sort((a, b) => {
+        if (b.missing !== a.missing) return b.missing - a.missing
+        return a.productName.localeCompare(b.productName, 'es', { sensitivity: 'base' })
+      })
+  }, [safeOrders, safeProducts, stockByProductId, productIdByName])
 
   const selectedProductStock = Number(stockByProductId[String(productId ?? '')] || 0)
 
@@ -757,6 +805,38 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
                 <tr>
                   <td colSpan={9} className="empty-detail">
                     No hay productos registrados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 18 }}>
+          <h4>Calculadora de Faltantes</h4>
+          <table className="products-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cantidad requerida</th>
+                <th>Stock actual</th>
+                <th>Faltante estimado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shortageCalculatorRows.map((row) => (
+                <tr key={`shortage-${row.productId}`}>
+                  <td>{row.productName}</td>
+                  <td>{row.required}</td>
+                  <td>{row.stock}</td>
+                  <td className={row.missing > 0 ? 'finance-result-negative' : ''}>{row.missing}</td>
+                </tr>
+              ))}
+
+              {shortageCalculatorRows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty-detail">
+                    No hay productos para calcular faltantes.
                   </td>
                 </tr>
               )}

@@ -127,6 +127,7 @@ function OrdersPage({
           products={products}
           purchases={purchases}
           clients={clients}
+          stockByProductId={stockByProductId}
           deliveryFilter={deliveryFilter}
           onFilterChange={setDeliveryFilter}
           onRegisterPayment={onRegisterPayment}

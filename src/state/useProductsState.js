@@ -4,6 +4,7 @@ const PRODUCTS_STORAGE_KEY = 'packya_products'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
 const STORAGE_VERSION = 2
 const allowedMovementTypes = ['Ajuste', 'Compra', 'Devolución', 'Venta', 'Muestra']
+export const PRODUCT_CATEGORIES = ['CAJA', 'BOLSA', 'EMBALAJE', 'OTRO']
 
 const initialProducts = [
   {
@@ -53,6 +54,26 @@ const toPositiveNumber = (value) => {
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
 }
 
+const normalizeCategory = (value) => {
+  const normalized = String(value ?? '').trim().toUpperCase()
+  return PRODUCT_CATEGORIES.includes(normalized) ? normalized : ''
+}
+
+const inferCategoryByName = (value) => {
+  const normalizedName = String(value ?? '').trim().toLowerCase()
+  if (normalizedName.includes('embalaje')) return 'EMBALAJE'
+  if (normalizedName.includes('caja')) return 'CAJA'
+  if (normalizedName.includes('bolsa')) return 'BOLSA'
+  if (normalizedName.includes('separador')) return 'OTRO'
+  return 'OTRO'
+}
+
+const resolveCategory = (productName, category) => {
+  const safeCategory = normalizeCategory(category)
+  if (safeCategory) return safeCategory
+  return inferCategoryByName(productName)
+}
+
 const calculateStockTotalFromMovements = (movements) =>
   (Array.isArray(movements) ? movements : []).reduce(
     (acc, movement) => acc + toInteger(movement?.amount),
@@ -79,6 +100,7 @@ const normalizeProduct = (product, index) => {
   if (!product || typeof product !== 'object') return null
 
   const productId = String(product.id ?? `PRD-${String(index + 1).padStart(3, '0')}`)
+  const normalizedName = String(product.name ?? '').trim()
   const normalizedMovements = Array.isArray(product.stockMovements)
     ? product.stockMovements
         .map((movement, movementIndex) =>
@@ -105,10 +127,12 @@ const normalizeProduct = (product, index) => {
 
   return {
     id: productId,
-    name: String(product.name ?? '').trim(),
+    name: normalizedName,
+    category: resolveCategory(normalizedName, product.category),
     stockTotal,
     stockMinimo: toPositiveInteger(product.stockMinimo),
     referenceCost: toPositiveNumber(product.referenceCost ?? product.lastUnitCost),
+    salePrice: toPositiveNumber(product.salePrice ?? product.unitPrice),
     stockMovements,
   }
 }
@@ -143,9 +167,44 @@ const loadProductsFromStorage = () => {
     const parsedProducts = JSON.parse(storedProducts)
     if (!Array.isArray(parsedProducts)) return []
 
+    let migrationApplied = false
+    const migrationSummary = {
+      CAJA: 0,
+      BOLSA: 0,
+      EMBALAJE: 0,
+      OTRO: 0,
+    }
+
     const normalizedProducts = parsedProducts
-      .map((product, index) => normalizeProduct(product, index))
+      .map((product, index) => {
+        const hadCategory = Boolean(normalizeCategory(product?.category))
+        const normalizedProduct = normalizeProduct(product, index)
+        if (!normalizedProduct) return null
+
+        if (!hadCategory) {
+          migrationApplied = true
+          migrationSummary[normalizedProduct.category] += 1
+        }
+
+        return normalizedProduct
+      })
       .filter((product) => product && product.name)
+
+    if (migrationApplied) {
+      try {
+        localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(normalizedProducts))
+      } catch (error) {
+        void error
+      }
+
+      console.info(
+        'Migración de categorías:\n' +
+          `CAJA: ${migrationSummary.CAJA} productos\n` +
+          `BOLSA: ${migrationSummary.BOLSA} productos\n` +
+          `EMBALAJE: ${migrationSummary.EMBALAJE} productos\n` +
+          `OTRO: ${migrationSummary.OTRO} productos`,
+      )
+    }
 
     return normalizedProducts
   } catch {
@@ -201,8 +260,10 @@ function useProductsState() {
     const normalizedProductBase = {
       id: incomingId || `PRD-${Date.now()}`,
       name: normalizedName,
+      category: resolveCategory(normalizedName, productData.category),
       stockMinimo: toPositiveInteger(productData.stockMinimo),
       referenceCost: toPositiveNumber(productData.referenceCost),
+      salePrice: toPositiveNumber(productData.salePrice),
     }
 
     setProducts((prevProducts) => {
@@ -213,7 +274,8 @@ function useProductsState() {
       const normalizedProduct = {
         ...normalizedProductBase,
         stockTotal: existingProduct?.stockTotal ?? 0,
-        referenceCost: existingProduct?.referenceCost ?? normalizedProductBase.referenceCost ?? 0,
+        referenceCost: normalizedProductBase.referenceCost,
+        salePrice: normalizedProductBase.salePrice,
         stockMovements: existingProduct?.stockMovements ?? [],
       }
 
@@ -340,9 +402,19 @@ function useProductsState() {
     )
   }
 
+  const deleteProduct = (productId) => {
+    const safeProductId = String(productId ?? '')
+    if (!safeProductId) return
+
+    setProducts((prevProducts) =>
+      prevProducts.filter((product) => String(product?.id ?? '') !== safeProductId),
+    )
+  }
+
   return {
     products,
     upsertProduct,
+    deleteProduct,
     adjustProductStock,
     registerOrderReturn,
     updateStock,

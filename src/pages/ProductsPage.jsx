@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
+import { PRODUCT_CATEGORIES } from '../state/useProductsState'
 import { calculateStockSnapshot } from '../utils/stock'
 
 const createInitialForm = () => ({
-  id: '',
   name: '',
+  category: 'OTRO',
   stockMinimo: 0,
   referenceCost: 0,
+  salePrice: 0,
 })
 
 const createInitialAdjustment = () => ({
@@ -26,9 +28,47 @@ const formatDateTime = (value) => {
   })
 }
 
-function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenceCost, onAdjustStock }) {
+const normalizeCategory = (value) => {
+  const normalized = String(value ?? '').trim().toUpperCase()
+  return PRODUCT_CATEGORIES.includes(normalized) ? normalized : ''
+}
+
+const inferCategoryByName = (value) => {
+  const normalizedName = String(value ?? '').trim().toLowerCase()
+  if (normalizedName.includes('embalaje')) return 'EMBALAJE'
+  if (normalizedName.includes('caja')) return 'CAJA'
+  if (normalizedName.includes('bolsa')) return 'BOLSA'
+  if (normalizedName.includes('separador')) return 'OTRO'
+  return 'OTRO'
+}
+
+const getCategoryFromProduct = (product) =>
+  normalizeCategory(product?.category) || inferCategoryByName(product?.name)
+
+const getProductMeasure = (name) => {
+  const safeName = String(name ?? '')
+  const match = safeName.match(/\d+\s*x\s*\d+(?:\s*x\s*\d+)?/i)
+  return match ? match[0].replace(/\s+/g, '') : '-'
+}
+
+const categoryTitles = {
+  CAJA: 'CAJAS',
+  BOLSA: 'BOLSAS',
+  EMBALAJE: 'EMBALAJE',
+  OTRO: 'OTROS',
+}
+
+function ProductsPage({
+  products,
+  orders,
+  onSaveProduct,
+  onDeleteProduct,
+  onUpdateProductReferenceCost,
+  onAdjustStock,
+}) {
   const [form, setForm] = useState(createInitialForm())
-  const [editingId, setEditingId] = useState(null)
+  const [quickEditingId, setQuickEditingId] = useState(null)
+  const [quickDrafts, setQuickDrafts] = useState({})
   const [adjustingProductId, setAdjustingProductId] = useState(null)
   const [historyProductId, setHistoryProductId] = useState(null)
   const [adjustment, setAdjustment] = useState(createInitialAdjustment())
@@ -54,10 +94,30 @@ function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenc
   const projectedStock = (adjustingProduct?.stockTotal ?? 0) + (isAdjustmentAmountValid ? adjustmentAmount : 0)
   const adjustmentWouldBeNegative = adjustingProduct && projectedStock < 0
 
+  const groupedProducts = useMemo(() => {
+    const safeRows = Array.isArray(stockRows) ? stockRows : []
+
+    return PRODUCT_CATEGORIES.map((category) => {
+      const items = safeRows
+        .filter((row) => getCategoryFromProduct(row) === category)
+        .sort((a, b) => String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }))
+
+      return {
+        key: category,
+        title: categoryTitles[category] ?? category,
+        items,
+      }
+    })
+  }, [stockRows])
+
   const handleInput = (field, value) => {
     setForm((prevForm) => ({
       ...prevForm,
-      [field]: field === 'name' ? value : Math.max(Number(value) || 0, 0),
+      [field]: field === 'name'
+        ? value
+        : field === 'category'
+          ? normalizeCategory(value) || 'OTRO'
+          : Math.max(Number(value) || 0, 0),
     }))
   }
 
@@ -66,33 +126,102 @@ function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenc
     if (!form.name.trim()) return
 
     onSaveProduct({
-      id: editingId ?? undefined,
       name: form.name.trim(),
+      category: normalizeCategory(form.category) || inferCategoryByName(form.name),
       stockMinimo: form.stockMinimo,
       referenceCost: form.referenceCost,
+      salePrice: form.salePrice,
     })
 
-    if (editingId) {
-      onUpdateProductReferenceCost?.(editingId, form.referenceCost)
-    }
-
     setForm(createInitialForm())
-    setEditingId(null)
   }
 
-  const handleEdit = (product) => {
-    setEditingId(product.id)
-    setForm({
+  const createQuickDraft = (product) => ({
+    name: String(product?.name ?? ''),
+    category: getCategoryFromProduct(product),
+    stockMinimo: Math.max(Number(product?.stockMinimo || 0), 0),
+    referenceCost: Math.max(Number(product?.referenceCost || 0), 0),
+    salePrice: Math.max(Number(product?.salePrice || 0), 0),
+  })
+
+  const openQuickEdit = (product) => {
+    if (!product?.id) return
+
+    setQuickEditingId(product.id)
+    setQuickDrafts((prev) => ({
+      ...prev,
+      [product.id]: createQuickDraft(product),
+    }))
+  }
+
+  const closeQuickEdit = (productId) => {
+    setQuickEditingId((currentId) => (currentId === productId ? null : currentId))
+    setQuickDrafts((prev) => {
+      const next = { ...prev }
+      delete next[productId]
+      return next
+    })
+  }
+
+  const updateQuickDraft = (productId, field, value) => {
+    setQuickDrafts((prev) => {
+      const currentDraft = prev[productId] ?? {
+        name: '',
+        category: 'OTRO',
+        stockMinimo: 0,
+        referenceCost: 0,
+        salePrice: 0,
+      }
+
+      const normalizedValue = field === 'name'
+        ? value
+        : field === 'category'
+          ? normalizeCategory(value) || 'OTRO'
+          : Math.max(Number(value) || 0, 0)
+
+      return {
+        ...prev,
+        [productId]: {
+          ...currentDraft,
+          [field]: normalizedValue,
+        },
+      }
+    })
+  }
+
+  const handleSaveQuickEdit = (product) => {
+    const productId = String(product?.id ?? '')
+    if (!productId) return
+
+    const draft = quickDrafts[productId] ?? createQuickDraft(product)
+    const normalizedName = String(draft.name ?? '').trim()
+    if (!normalizedName) return
+
+    onSaveProduct({
       id: product.id,
-      name: product.name,
-      stockMinimo: product.stockMinimo,
-      referenceCost: Number(product.referenceCost || 0),
+      name: normalizedName,
+      category: normalizeCategory(draft.category) || inferCategoryByName(normalizedName),
+      stockMinimo: Math.max(Number(draft.stockMinimo || 0), 0),
+      referenceCost: Math.max(Number(draft.referenceCost || 0), 0),
+      salePrice: Math.max(Number(draft.salePrice || 0), 0),
     })
+
+    onUpdateProductReferenceCost?.(product.id, Math.max(Number(draft.referenceCost || 0), 0))
+
+    closeQuickEdit(productId)
   }
 
-  const handleCancelEdit = () => {
-    setEditingId(null)
-    setForm(createInitialForm())
+  const handleDeleteProduct = (product) => {
+    const productId = String(product?.id ?? '')
+    if (!productId) return
+
+    const confirmed = window.confirm(`¿Eliminar el producto ${product.name}? Esta acción no se puede deshacer.`)
+    if (!confirmed) return
+
+    onDeleteProduct?.(productId)
+    closeQuickEdit(productId)
+    setHistoryProductId((currentId) => (currentId === productId ? null : currentId))
+    setAdjustingProductId((currentId) => (currentId === productId ? null : currentId))
   }
 
   const openAdjustPanel = (product) => {
@@ -139,7 +268,7 @@ function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenc
       <div className="products-grid">
         <section className="card-block">
           <div className="card-head">
-            <h3>{editingId ? 'Editar producto' : 'Nuevo producto'}</h3>
+            <h3>Nuevo producto</h3>
           </div>
 
           <form className="order-form" onSubmit={handleSubmit}>
@@ -152,6 +281,20 @@ function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenc
                 placeholder="Nombre del producto"
                 required
               />
+            </label>
+
+            <label>
+              Categoría
+              <select
+                value={form.category}
+                onChange={(event) => handleInput('category', event.target.value)}
+              >
+                {PRODUCT_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label>
@@ -178,18 +321,20 @@ function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenc
               </p>
             </label>
 
+            <label>
+              Precio de venta sugerido
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.salePrice}
+                onChange={(event) => handleInput('salePrice', event.target.value)}
+              />
+            </label>
+
             <div className="product-actions">
-              {editingId && (
-                <button
-                  type="button"
-                  className="secondary-btn"
-                  onClick={handleCancelEdit}
-                >
-                  Cancelar
-                </button>
-              )}
               <button type="submit" className="primary-btn">
-                {editingId ? 'Guardar cambios' : 'Agregar producto'}
+                Agregar producto
               </button>
             </div>
           </form>
@@ -197,67 +342,167 @@ function ProductsPage({ products, orders, onSaveProduct, onUpdateProductReferenc
 
         <section className="card-block">
           <div className="card-head">
-            <h3>Listado de productos</h3>
+            <h3>Panel de productos por categoría</h3>
           </div>
 
-          <div className="table-wrap">
-            <table className="products-table">
-              <thead>
-                <tr>
-                  <th>Producto</th>
-                  <th>Stock total</th>
-                  <th>Reservado</th>
-                  <th>Disponible</th>
-                  <th>Mínimo</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {stockRows.map((product) => (
-                  <tr key={product.id}>
-                    <td>{product.name}</td>
-                    <td>{product.stockTotal}</td>
-                    <td>{product.stockReservado}</td>
-                    <td>{product.stockDisponible}</td>
-                    <td>{product.stockMinimo}</td>
-                    <td>
-                      <div className="product-row-actions">
-                        <button
-                          type="button"
-                          className="quick-fill-btn"
-                          onClick={() => handleEdit(product)}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          className="quick-fill-btn"
-                          onClick={() => openAdjustPanel(product)}
-                        >
-                          Ajustar stock
-                        </button>
-                        <button
-                          type="button"
-                          className="quick-fill-btn"
-                          onClick={() => toggleHistory(product.id)}
-                        >
-                          Ver historial
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+          {groupedProducts.map((group) => (
+            <div key={group.key}>
+              <h4>{group.title}</h4>
+              <div className="table-wrap">
+                <table className="products-table">
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th>Medida</th>
+                      <th>Costo</th>
+                      <th>Precio</th>
+                      <th>Stock</th>
+                      <th>Mínimo</th>
+                      <th>Categoría</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.items.map((product) => {
+                      const isEditing = quickEditingId === product.id
+                      const draft = quickDrafts[product.id] ?? createQuickDraft(product)
 
-                {stockRows.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="empty-detail">
-                      No hay productos registrados.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                      return (
+                        <tr key={product.id}>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                type="text"
+                                value={draft.name}
+                                onChange={(event) => updateQuickDraft(product.id, 'name', event.target.value)}
+                              />
+                            ) : (
+                              product.name
+                            )}
+                          </td>
+                          <td>{getProductMeasure(isEditing ? draft.name : product.name)}</td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={draft.referenceCost}
+                                onChange={(event) => updateQuickDraft(product.id, 'referenceCost', event.target.value)}
+                              />
+                            ) : (
+                              Number(product.referenceCost || 0)
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={draft.salePrice}
+                                onChange={(event) => updateQuickDraft(product.id, 'salePrice', event.target.value)}
+                              />
+                            ) : (
+                              Number(product.salePrice || 0)
+                            )}
+                          </td>
+                          <td>{product.stockDisponible}</td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                type="number"
+                                min="0"
+                                value={draft.stockMinimo}
+                                onChange={(event) => updateQuickDraft(product.id, 'stockMinimo', event.target.value)}
+                              />
+                            ) : (
+                              product.stockMinimo
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                value={draft.category}
+                                onChange={(event) => updateQuickDraft(product.id, 'category', event.target.value)}
+                              >
+                                {PRODUCT_CATEGORIES.map((category) => (
+                                  <option key={category} value={category}>
+                                    {category}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              getCategoryFromProduct(product)
+                            )}
+                          </td>
+                          <td>
+                            <div className="product-row-actions">
+                              {!isEditing ? (
+                                <button
+                                  type="button"
+                                  className="quick-fill-btn"
+                                  onClick={() => openQuickEdit(product)}
+                                >
+                                  Editar
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="quick-fill-btn"
+                                    onClick={() => handleSaveQuickEdit(product)}
+                                  >
+                                    Guardar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="quick-fill-btn"
+                                    onClick={() => closeQuickEdit(product.id)}
+                                  >
+                                    Cancelar
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                className="quick-fill-btn"
+                                onClick={() => openAdjustPanel(product)}
+                              >
+                                Ajustar stock
+                              </button>
+                              <button
+                                type="button"
+                                className="quick-fill-btn"
+                                onClick={() => toggleHistory(product.id)}
+                              >
+                                Ver historial
+                              </button>
+                              <button
+                                type="button"
+                                className="danger-ghost-btn"
+                                onClick={() => handleDeleteProduct(product)}
+                              >
+                                Eliminar
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+
+                    {group.items.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="empty-detail">
+                          Sin productos en esta categoría.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </section>
       </div>
 

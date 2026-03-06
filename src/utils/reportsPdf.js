@@ -293,11 +293,11 @@ export const generateCostsPDF = ({ rows }) => {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
   const subtitle = `Reporte de costos | ${formatDateTime(new Date())}`
   const columns = [
-    { key: 'name', label: 'Producto', width: 78, align: 'left' },
-    { key: 'cost', label: 'Costo', width: 32, align: 'right' },
-    { key: 'price', label: 'Precio', width: 32, align: 'right' },
-    { key: 'margin', label: 'Margen', width: 32, align: 'right' },
-    { key: 'category', label: 'Categoría', width: 22, align: 'left' },
+    { key: 'name', label: 'Producto', width: 76, align: 'left' },
+    { key: 'cost', label: 'Costo', width: 28, align: 'right' },
+    { key: 'price', label: 'Precio', width: 28, align: 'right' },
+    { key: 'margin', label: 'Margen', width: 28, align: 'right' },
+    { key: 'marginPercent', label: 'Margen %', width: 26, align: 'right' },
   ]
 
   let cursorY = drawHeader(doc, 'Reporte de Costos', subtitle)
@@ -319,7 +319,7 @@ export const generateCostsPDF = ({ rows }) => {
       cost: formatCurrency(row.referenceCost),
       price: formatCurrency(row.salePrice),
       margin: formatCurrency(row.margin),
-      category: row.category,
+      marginPercent: `${Math.round(Number(row.marginPercent || 0))}%`,
     })
   })
 

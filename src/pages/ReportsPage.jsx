@@ -36,7 +36,7 @@ const getDaysBetween = (value, now) => {
   return Math.max(Math.floor(diffMs / (1000 * 60 * 60 * 24)), 0)
 }
 
-function ReportsPage({ products, orders, clients }) {
+function ReportsPage({ products, orders, clients, onSaveProduct }) {
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
   const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
@@ -53,6 +53,10 @@ function ReportsPage({ products, orders, clients }) {
     isOpen: false,
     rows: [],
     readyRows: [],
+  })
+  const [missingCostsModal, setMissingCostsModal] = useState({
+    isOpen: false,
+    rows: [],
   })
 
   const productsSorted = useMemo(
@@ -75,6 +79,17 @@ function ReportsPage({ products, orders, clients }) {
       return selectedCategories[category] === true
     })
   }, [productsSorted, selectedCategories, selectedProductIds, selectionMode])
+
+  const productsById = useMemo(
+    () =>
+      productsSorted.reduce((acc, product) => {
+        const productId = String(product?.id ?? '')
+        if (!productId) return acc
+        acc[productId] = product
+        return acc
+      }, {}),
+    [productsSorted],
+  )
 
   const debtRows = useMemo(() => {
     const now = new Date()
@@ -137,6 +152,8 @@ function ReportsPage({ products, orders, clients }) {
           salePrice,
           referenceCost,
           margin: salePrice - referenceCost,
+          marginPercent: salePrice > 0 ? ((salePrice - referenceCost) / salePrice) * 100 : 0,
+          hasMissingValues: salePrice === 0 || referenceCost === 0,
         }
       }),
     [productsSorted],
@@ -258,6 +275,94 @@ function ReportsPage({ products, orders, clients }) {
     }))
   }
 
+  const closeMissingCostsModal = () => {
+    setMissingCostsModal({
+      isOpen: false,
+      rows: [],
+    })
+  }
+
+  const handleMissingCostsChange = (rowId, field, value) => {
+    setMissingCostsModal((prev) => ({
+      ...prev,
+      rows: prev.rows.map((row) => {
+        if (row.id !== rowId) return row
+        return {
+          ...row,
+          [field]: value,
+        }
+      }),
+    }))
+  }
+
+  const handleGenerateCostsReport = () => {
+    const missingRows = costRows
+      .filter((row) => row.hasMissingValues)
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        referenceCost: String(row.referenceCost),
+        salePrice: String(row.salePrice),
+      }))
+
+    if (missingRows.length > 0) {
+      window.alert('⚠ Producto sin costo o precio cargado')
+      setMissingCostsModal({
+        isOpen: true,
+        rows: missingRows,
+      })
+      return
+    }
+
+    generateCostsPDF({ rows: costRows })
+  }
+
+  const handleSaveCostsAndGenerate = () => {
+    const updatedValuesById = {}
+
+    missingCostsModal.rows.forEach((row) => {
+      const productId = String(row?.id ?? '')
+      const baseProduct = productsById[productId]
+      if (!productId || !baseProduct) return
+
+      const nextReferenceCost = toPositiveNumber(row.referenceCost)
+      const nextSalePrice = toPositiveNumber(row.salePrice)
+
+      updatedValuesById[productId] = {
+        referenceCost: nextReferenceCost,
+        salePrice: nextSalePrice,
+      }
+
+      if (typeof onSaveProduct === 'function') {
+        onSaveProduct({
+          id: String(baseProduct.id),
+          name: String(baseProduct.name ?? ''),
+          category: String(baseProduct.category ?? ''),
+          stockMinimo: toPositiveNumber(baseProduct.stockMinimo),
+          referenceCost: nextReferenceCost,
+          salePrice: nextSalePrice,
+        })
+      }
+    })
+
+    const rowsForPdf = costRows.map((row) => {
+      const override = updatedValuesById[row.id]
+      if (!override) return row
+
+      const margin = override.salePrice - override.referenceCost
+      return {
+        ...row,
+        referenceCost: override.referenceCost,
+        salePrice: override.salePrice,
+        margin,
+        marginPercent: override.salePrice > 0 ? (margin / override.salePrice) * 100 : 0,
+      }
+    })
+
+    closeMissingCostsModal()
+    generateCostsPDF({ rows: rowsForPdf })
+  }
+
   const toggleCategory = (categoryKey) => {
     setSelectedCategories((prev) => ({
       ...prev,
@@ -356,7 +461,7 @@ function ReportsPage({ products, orders, clients }) {
             <button
               type="button"
               className="secondary-btn"
-              onClick={() => generateCostsPDF({ rows: costRows })}
+              onClick={handleGenerateCostsReport}
             >
               Reporte de costos
             </button>
@@ -436,6 +541,65 @@ function ReportsPage({ products, orders, clients }) {
               </button>
               <button type="button" className="primary-btn" onClick={handleConfirmMissingPrice}>
                 Generar PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {missingCostsModal.isOpen && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Producto sin costo o precio cargado">
+          <div className="modal-card reports-missing-price-modal">
+            <h4>⚠ Producto sin costo o precio cargado</h4>
+            <p className="muted-label">Completá costo y precio para continuar con el reporte de costos.</p>
+
+            <div className="reports-missing-table-wrap">
+              <table className="orders-table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Costo producto</th>
+                    <th>Precio producto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {missingCostsModal.rows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.name}</td>
+                      <td>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={row.referenceCost}
+                          onChange={(event) =>
+                            handleMissingCostsChange(row.id, 'referenceCost', event.target.value)
+                          }
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={row.salePrice}
+                          onChange={(event) =>
+                            handleMissingCostsChange(row.id, 'salePrice', event.target.value)
+                          }
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="product-actions">
+              <button type="button" className="secondary-btn" onClick={closeMissingCostsModal}>
+                Cancelar
+              </button>
+              <button type="button" className="primary-btn" onClick={handleSaveCostsAndGenerate}>
+                Guardar y generar PDF
               </button>
             </div>
           </div>

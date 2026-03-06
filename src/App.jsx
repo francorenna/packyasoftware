@@ -558,6 +558,7 @@ function App() {
                 products={products}
                 orders={orders}
                 clients={clients}
+                onSaveProduct={upsertProduct}
               />
             }
           />

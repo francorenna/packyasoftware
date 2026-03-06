@@ -13,6 +13,7 @@ const navItems = [
   { to: '/compras', label: 'Compras' },
   { to: '/listas-compra', label: '🛒 Listas de Compra' },
   { to: '/stock', label: 'Stock' },
+  { to: '/reportes', label: '📄 Reportes' },
   { to: '/configuracion', label: '⚙ Configuración' },
 ]
 

@@ -321,6 +321,65 @@ textarea {
   grid-template-columns: minmax(320px, 380px) 1fr;
   gap: 1rem;
 }
+
+.reports-grid {
+  margin-top: 1.4rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.reports-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-bottom: 0.7rem;
+}
+
+.reports-controls-categories {
+  padding-top: 0.4rem;
+  border-top: 1px dashed #dbe6f3;
+}
+
+.reports-controls label {
+  font-size: 0.86rem;
+  color: #334155;
+}
+
+.reports-manual-list {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.65rem;
+  padding: 0.6rem;
+  background: #f8fafc;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.reports-manual-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+}
+
+.reports-missing-price-modal {
+  width: min(96vw, 860px);
+}
+
+.reports-missing-table-wrap {
+  margin-top: 0.8rem;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.65rem;
+}
+
+.reports-missing-table-wrap input[type='number'] {
+  width: 100%;
+}
 .clients-grid {
   margin-top: 1.4rem;
   display: grid;
@@ -1426,6 +1485,10 @@ textarea {
   }
 
   .products-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reports-grid {
     grid-template-columns: 1fr;
   }
   .inline-field-row {

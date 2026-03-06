@@ -9,6 +9,7 @@ import ManualPurchaseListsPage from './pages/ManualPurchaseListsPage'
 import OrdersPage from './pages/OrdersPage'
 import ProductsPage from './pages/ProductsPage'
 import PurchasesPage from './pages/PurchasesPage'
+import ReportsPage from './pages/ReportsPage'
 import QuotesPage from './pages/QuotesPage'
 import SettingsPage from './pages/SettingsPage'
 import StockPage from './pages/StockPage'
@@ -547,6 +548,16 @@ function App() {
                 onDuplicateList={duplicateList}
                 onConvertToPurchase={convertToPurchase}
                 onSaveSupplier={upsertSupplier}
+              />
+            }
+          />
+          <Route
+            path="/reportes"
+            element={
+              <ReportsPage
+                products={products}
+                orders={orders}
+                clients={clients}
               />
             }
           />

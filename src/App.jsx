@@ -42,6 +42,7 @@ function App() {
     reopenOrder,
     updateOrderClient,
     updateOrderItems,
+    updateOrderUrgency,
     convertSampleToRealOrder,
     deleteCancelledOrder,
   } = useOrdersState()
@@ -465,6 +466,7 @@ function App() {
                 onUpdateOrderDelivery={updateOrderDelivery}
                 onUpdateOrderClient={updateOrderClient}
                 onUpdateOrderItems={updateOrderItems}
+                onUpdateOrderUrgency={updateOrderUrgency}
                 onDeleteCancelledOrder={deleteCancelledOrder}
                 onCreateClient={handleCreateClient}
               />

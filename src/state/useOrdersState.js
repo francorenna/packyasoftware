@@ -211,6 +211,7 @@ const normalizeOrder = (order, index) => {
     shippingCost: toPositiveNumber(order.shippingCost),
     financialNote: String(order.financialNote ?? '').trim(),
     discount: toPositiveNumber(order.discount),
+    urgent: Boolean(order.urgent ?? false),
     isSample: Boolean(order.isSample ?? false),
     isArchived: Boolean(order.isArchived ?? false),
     archivedAt: normalizedArchivedAt,
@@ -287,6 +288,7 @@ function useOrdersState() {
         sourceQuoteId: String(newOrder.sourceQuoteId ?? '').trim(),
         shippingCost: toPositiveNumber(newOrder.shippingCost),
         financialNote: String(newOrder.financialNote ?? '').trim(),
+        urgent: Boolean(newOrder.urgent ?? false),
         isArchived: Boolean(newOrder.isArchived ?? false),
         archivedAt: newOrder.archivedAt ?? null,
         payments: [],
@@ -416,6 +418,19 @@ function useOrdersState() {
     )
   }
 
+  const updateOrderUrgency = (orderId, isUrgent) => {
+    setOrders((prevOrders) =>
+      prevOrders.map((order) => {
+        if (order.id !== orderId) return order
+
+        return {
+          ...order,
+          urgent: Boolean(isUrgent),
+        }
+      }),
+    )
+  }
+
   const updateOrderItems = (orderId, nextItems) => {
     const safeNextItems = Array.isArray(nextItems)
       ? nextItems
@@ -534,6 +549,7 @@ function useOrdersState() {
     reopenOrder,
     updateOrderClient,
     updateOrderItems,
+    updateOrderUrgency,
     convertSampleToRealOrder,
     deleteCancelledOrder,
   }

@@ -38,6 +38,40 @@ textarea {
   flex-wrap: wrap;
 }
 
+.order-id-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.urgent-toggle-btn {
+  border: 1px solid #fecaca;
+  background: #fff5f5;
+  color: #9f1239;
+  border-radius: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.urgent-toggle-btn:hover {
+  background: #ffe4e6;
+}
+
+.urgent-toggle-btn-active {
+  background: #ffe2e2;
+  border-color: #fca5a5;
+  color: #b00020;
+}
+
+.urgent-badge {
+  background: #ffe2e2;
+  color: #b00020;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
 .client-debt-badge {
   display: inline-flex;
   align-items: center;
@@ -222,6 +256,63 @@ textarea {
   display: grid;
   grid-template-columns: minmax(360px, 450px) 1fr;
   gap: 1rem;
+}
+
+.orders-list-column {
+  display: grid;
+  gap: 1rem;
+}
+
+.production-summary {
+  background: #ffffff;
+  border: 1px solid #dbe6f3;
+  border-radius: 0.85rem;
+  padding: 1rem;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+}
+
+.production-summary h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.production-summary-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 0.7rem;
+}
+
+.summary-card {
+  border-radius: 0.75rem;
+  padding: 0.8rem;
+  background: linear-gradient(180deg, #f8fbff 0%, #f3f7ff 100%);
+  border: 1px solid #d9e4f5;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.05);
+  display: grid;
+  gap: 0.1rem;
+}
+
+.summary-number {
+  margin: 0;
+  font-size: 1.35rem;
+  line-height: 1.15;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.summary-label {
+  margin: 0 0 0.2rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.summary-helper {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #64748b;
 }
 
 .products-grid {
@@ -1322,6 +1413,10 @@ textarea {
   .orders-grid {
     grid-template-columns: 1fr;
   }
+
+  .production-summary-grid {
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
   .clients-grid {
     grid-template-columns: 1fr;
   }
@@ -1433,6 +1528,16 @@ textarea {
 
   .payments-table {
     min-width: 540px;
+  }
+
+  .production-summary-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .production-summary-grid {
+    grid-template-columns: 1fr;
   }
 }
 

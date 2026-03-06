@@ -83,8 +83,8 @@ function OrdersList({
   onUpdateOrderDelivery,
   onUpdateOrderClient,
   onUpdateOrderItems,
+  onUpdateOrderUrgency,
   onDeleteCancelledOrder,
-  forcedOpenOrderId,
 }) {
   const [expandedOrderId, setExpandedOrderId] = useState(null)
   const [paymentDrafts, setPaymentDrafts] = useState({})
@@ -98,7 +98,17 @@ function OrdersList({
     initialDeliveredBy: '',
     initialDeliveryNote: '',
   })
-  const safeOrders = Array.isArray(orders) ? orders : []
+  const safeOrders = useMemo(() => {
+    const baseOrders = Array.isArray(orders) ? orders : []
+    const seen = new Set()
+
+    return baseOrders.filter((order) => {
+      const orderId = String(order?.id ?? '')
+      if (seen.has(orderId)) return false
+      seen.add(orderId)
+      return true
+    })
+  }, [orders])
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
   const safeClients = Array.isArray(clients) ? clients : []
@@ -117,15 +127,12 @@ function OrdersList({
       ),
     [clients],
   )
-  const safeForcedOpenOrderId = useMemo(
-    () => (forcedOpenOrderId ? String(forcedOpenOrderId) : null),
-    [forcedOpenOrderId],
-  )
-
   useEffect(() => {
-    if (!safeForcedOpenOrderId) return
-    setExpandedOrderId(safeForcedOpenOrderId)
-  }, [safeForcedOpenOrderId])
+    if (!expandedOrderId) return
+    if (!safeOrders.some((order) => String(order?.id ?? '') === expandedOrderId)) {
+      setExpandedOrderId(null)
+    }
+  }, [safeOrders, expandedOrderId])
 
   const clientsById = useMemo(
     () =>
@@ -356,8 +363,8 @@ function OrdersList({
               const selectedClientIdForSelect =
                 selectedClientId || String(resolvedClientByName?.id ?? '')
 
+              const isUrgent = Boolean(order?.urgent)
               const isExpanded = expandedOrderId === orderId
-              const isForcedOpened = safeForcedOpenOrderId === orderId
               const paymentDraft = getDraftForOrder(orderId)
               const deliveryDraft = getDeliveryDraftForOrder(order)
               const deliverySaveUi = getDeliverySaveUiForOrder(orderId)
@@ -689,15 +696,34 @@ function OrdersList({
                 onDeleteCancelledOrder?.(orderId)
               }
 
+              const handleToggleUrgent = (event) => {
+                event.stopPropagation()
+                onUpdateOrderUrgency?.(orderId, !isUrgent)
+              }
+
               return (
                 <Fragment key={orderId}>
                   <tr
-                    className={`order-main-row ${order.isSample ? 'order-main-row-sample' : ''} ${isExpanded ? 'order-main-row-expanded' : ''} ${isForcedOpened ? 'order-main-row-focus' : ''}`}
+                    className={`order-main-row ${order.isSample ? 'order-main-row-sample' : ''} ${isExpanded ? 'order-main-row-expanded' : ''}`}
                     onClick={() => toggleOrder(orderId)}
                   >
-                    <td>{orderId}</td>
+                    <td>
+                      <div className="order-id-cell">
+                        <span>{orderId}</span>
+                        <button
+                          type="button"
+                          className={`urgent-toggle-btn ${isUrgent ? 'urgent-toggle-btn-active' : ''}`}
+                          onClick={handleToggleUrgent}
+                          title={isUrgent ? 'Quitar urgencia' : 'Marcar urgente'}
+                          aria-label={isUrgent ? 'Quitar urgencia del pedido' : 'Marcar pedido urgente'}
+                        >
+                          🔥
+                        </button>
+                      </div>
+                    </td>
                     <td>
                       <div className="order-client-cell">
+                        {isUrgent && <span className="urgent-badge">🔥 URGENTE</span>}
                         <span>{orderClient}</span>
                         {hasClientDebt && <span className="client-debt-badge">⚠ Cliente con deuda</span>}
                       </div>
@@ -714,7 +740,13 @@ function OrdersList({
                     <td>{order.isSample ? 'Muestra' : formatCurrency(finalTotal)}</td>
                   </tr>
 
-                  {isExpanded && (
+                  {isExpanded && (() => {
+                    if (!order || !order.items || !Array.isArray(order.items)) {
+                      return null
+                    }
+
+                    try {
+                      return (
                     <tr className="order-detail-row">
                       <td colSpan={5}>
                         <div className="order-detail-content">
@@ -1225,7 +1257,12 @@ function OrdersList({
                         </div>
                       </td>
                     </tr>
-                  )}
+                      )
+                    } catch (err) {
+                      console.error('Order render error', err)
+                      return null
+                    }
+                  })()}
                 </Fragment>
               )
             })}

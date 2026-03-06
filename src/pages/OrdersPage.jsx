@@ -1,8 +1,18 @@
 import { useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import OrdersForm from '../components/orders/OrdersForm'
 import OrdersList from '../components/orders/OrdersList'
 import { getStockMapByProductId } from '../utils/stock'
+
+const toPositiveNumber = (value) => {
+  const parsed = Number(value)
+  return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
+}
+
+const getOrderTotalBoxes = (order) =>
+  (Array.isArray(order?.items) ? order.items : []).reduce(
+    (acc, item) => acc + toPositiveNumber(item?.quantity),
+    0,
+  )
 
 const formatDateInput = (date) => {
   const year = date.getFullYear()
@@ -60,10 +70,10 @@ function OrdersPage({
   onUpdateOrderDelivery,
   onUpdateOrderClient,
   onUpdateOrderItems,
+  onUpdateOrderUrgency,
   onDeleteCancelledOrder,
   onCreateClient,
 }) {
-  const [searchParams] = useSearchParams()
   const [deliveryFilter, setDeliveryFilter] = useState('all')
 
   const nextOrderId = useMemo(
@@ -92,6 +102,11 @@ function OrdersPage({
     })
 
     return [...filteredOrders].sort((a, b) => {
+      const aUrgent = Boolean(a?.urgent)
+      const bUrgent = Boolean(b?.urgent)
+      if (aUrgent && !bUrgent) return -1
+      if (!aUrgent && bUrgent) return 1
+
       const groupDiff = getOrderSortGroup(a) - getOrderSortGroup(b)
       if (groupDiff !== 0) return groupDiff
 
@@ -99,7 +114,81 @@ function OrdersPage({
     })
   }, [deliveryFilter, orders, todayKey, tomorrowKey])
 
-  const openOrderId = searchParams.get('open') ?? null
+  const productionSummary = useMemo(() => {
+    const summary = {
+      urgent: { cantidadPedidos: 0, totalCajas: 0 },
+      pending: { cantidadPedidos: 0, totalCajas: 0 },
+      inProgress: { cantidadPedidos: 0, totalCajas: 0 },
+      ready: { cantidadPedidos: 0, totalCajas: 0 },
+      toDeliver: { cantidadPedidos: 0, totalCajas: 0 },
+    }
+
+    displayedOrders.forEach((order) => {
+      const status = String(order?.status ?? '')
+      const totalCajas = getOrderTotalBoxes(order)
+
+      if (order?.urgent) {
+        summary.urgent.cantidadPedidos += 1
+        summary.urgent.totalCajas += totalCajas
+      }
+
+      if (status === 'Pendiente') {
+        summary.pending.cantidadPedidos += 1
+        summary.pending.totalCajas += totalCajas
+      }
+
+      if (status === 'En Proceso') {
+        summary.inProgress.cantidadPedidos += 1
+        summary.inProgress.totalCajas += totalCajas
+      }
+
+      if (status === 'Listo') {
+        summary.ready.cantidadPedidos += 1
+        summary.ready.totalCajas += totalCajas
+      }
+
+      if (status === 'Entregado' && order?.isArchived !== true) {
+        summary.toDeliver.cantidadPedidos += 1
+        summary.toDeliver.totalCajas += totalCajas
+      }
+    })
+
+    return summary
+  }, [displayedOrders])
+
+  const summaryCards = [
+    {
+      key: 'urgent',
+      icon: '🔥',
+      title: 'Urgentes',
+      data: productionSummary.urgent,
+    },
+    {
+      key: 'pending',
+      icon: '⏳',
+      title: 'Pendientes',
+      data: productionSummary.pending,
+    },
+    {
+      key: 'inProgress',
+      icon: '⚙',
+      title: 'En producción',
+      data: productionSummary.inProgress,
+    },
+    {
+      key: 'ready',
+      icon: '✅',
+      title: 'Listos',
+      data: productionSummary.ready,
+    },
+    {
+      key: 'toDeliver',
+      icon: '🚚',
+      title: 'Por entregar',
+      data: productionSummary.toDeliver,
+    },
+  ]
+
   const stockByProductId = useMemo(
     () => getStockMapByProductId(products, orders),
     [products, orders],
@@ -122,22 +211,39 @@ function OrdersPage({
           onCreate={onCreateOrder}
           onCreateClient={onCreateClient}
         />
-        <OrdersList
-          orders={displayedOrders}
-          products={products}
-          purchases={purchases}
-          clients={clients}
-          stockByProductId={stockByProductId}
-          deliveryFilter={deliveryFilter}
-          onFilterChange={setDeliveryFilter}
-          onRegisterPayment={onRegisterPayment}
-          onUpdateOrderStatus={onUpdateOrderStatus}
-          onUpdateOrderDelivery={onUpdateOrderDelivery}
-          onUpdateOrderClient={onUpdateOrderClient}
-          onUpdateOrderItems={onUpdateOrderItems}
-          onDeleteCancelledOrder={onDeleteCancelledOrder}
-          forcedOpenOrderId={openOrderId}
-        />
+        <div className="orders-list-column">
+          <section className="production-summary" aria-label="Resumen de Producción">
+            <h3>Resumen de Producción</h3>
+            <div className="production-summary-grid">
+              {summaryCards.map((card) => (
+                <article key={card.key} className="summary-card">
+                  <p className="summary-label">{card.icon} {card.title}</p>
+                  <p className="summary-number">{card.data.cantidadPedidos}</p>
+                  <p className="summary-helper">Pedidos</p>
+                  <p className="summary-number">{card.data.totalCajas}</p>
+                  <p className="summary-helper">Cajas</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <OrdersList
+            orders={displayedOrders}
+            products={products}
+            purchases={purchases}
+            clients={clients}
+            stockByProductId={stockByProductId}
+            deliveryFilter={deliveryFilter}
+            onFilterChange={setDeliveryFilter}
+            onRegisterPayment={onRegisterPayment}
+            onUpdateOrderStatus={onUpdateOrderStatus}
+            onUpdateOrderDelivery={onUpdateOrderDelivery}
+            onUpdateOrderClient={onUpdateOrderClient}
+            onUpdateOrderItems={onUpdateOrderItems}
+            onUpdateOrderUrgency={onUpdateOrderUrgency}
+            onDeleteCancelledOrder={onDeleteCancelledOrder}
+          />
+        </div>
       </div>
     </section>
   )

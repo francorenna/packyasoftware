@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react'
 import { getOrderFinancialSummary } from '../utils/finance'
-import { generateCostsPDF, generateDebtPDF, generatePriceListPDF } from '../utils/reportsPdf'
+import {
+  generateClientAccountPDF,
+  generateCostsPDF,
+  generateDebtPDF,
+  generateExpensesReportPDF,
+  generatePriceListPDF,
+  generateProductionReportPDF,
+  generateStockStatusPDF,
+} from '../utils/reportsPdf'
+import { getStockMapByProductId } from '../utils/stock'
 
 const CATEGORY_OPTIONS = [
   { key: 'CAJA', label: 'CAJAS' },
@@ -29,6 +38,55 @@ const getClientKey = (order) => {
   return `name:${clientName}`
 }
 
+const getClientDisplayName = (order) => String(order?.clientName ?? order?.client ?? 'Sin cliente').trim() || 'Sin cliente'
+
+const getMonthKeyFromOrder = (order) => {
+  const deliveryDate = String(order?.deliveryDate ?? '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return deliveryDate.slice(0, 7)
+
+  const createdAt = new Date(order?.createdAt)
+  if (Number.isNaN(createdAt.getTime())) return 'Sin mes'
+  return `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, '0')}`
+}
+
+const getMonthLabel = (monthKey) => {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey ?? ''))) return 'Sin mes'
+  const [year, month] = String(monthKey).split('-').map(Number)
+  const date = new Date(year, month - 1, 1)
+
+  return date.toLocaleDateString('es-AR', {
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
+const formatDate = (value) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'Sin fecha'
+  return parsed.toLocaleDateString('es-AR')
+}
+
+const formatDateDDMMYYYY = (value) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'Sin fecha'
+
+  const day = String(parsed.getDate()).padStart(2, '0')
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const year = parsed.getFullYear()
+  return `${day}/${month}/${year}`
+}
+
+const formatTime = (value) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'Sin hora'
+
+  return parsed.toLocaleTimeString('es-AR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 const getDaysBetween = (value, now) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 0
@@ -36,10 +94,11 @@ const getDaysBetween = (value, now) => {
   return Math.max(Math.floor(diffMs / (1000 * 60 * 60 * 24)), 0)
 }
 
-function ReportsPage({ products, orders, clients, onSaveProduct }) {
+function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
   const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
+  const safeExpenses = useMemo(() => (Array.isArray(expenses) ? expenses : []), [expenses])
 
   const [selectionMode, setSelectionMode] = useState('all')
   const [selectedCategories, setSelectedCategories] = useState(() =>
@@ -58,6 +117,9 @@ function ReportsPage({ products, orders, clients, onSaveProduct }) {
     isOpen: false,
     rows: [],
   })
+  const [hasShownMissingCostsWarning, setHasShownMissingCostsWarning] = useState(false)
+  const [accountScope, setAccountScope] = useState('all')
+  const [selectedAccountClientKey, setSelectedAccountClientKey] = useState('')
 
   const productsSorted = useMemo(
     () =>
@@ -138,6 +200,241 @@ function ReportsPage({ products, orders, clients, onSaveProduct }) {
       .filter((row) => row.totalDebt > 0)
       .sort((a, b) => b.totalDebt - a.totalDebt)
   }, [safeClients, safeOrders])
+
+  const accountClientOptions = useMemo(() => {
+    const uniqueByKey = {}
+
+    safeOrders.forEach((order) => {
+      if (order?.isSample) return
+      if (String(order?.status ?? '') === 'Cancelado') return
+
+      const clientKey = getClientKey(order)
+      if (!clientKey) return
+
+      const clientId = String(order?.clientId ?? '').trim()
+      const knownClient = clientId ? safeClients.find((client) => String(client?.id ?? '') === clientId) : null
+
+      uniqueByKey[clientKey] = {
+        key: clientKey,
+        label: String(knownClient?.name ?? getClientDisplayName(order)),
+      }
+    })
+
+    return Object.values(uniqueByKey).sort((a, b) =>
+      String(a.label).localeCompare(String(b.label), 'es', { sensitivity: 'base' }),
+    )
+  }, [safeClients, safeOrders])
+
+  const accountRows = useMemo(() => {
+    const now = new Date()
+    const rows = []
+
+    safeOrders.forEach((order, orderIndex) => {
+      if (order?.isSample) return
+      if (String(order?.status ?? '') === 'Cancelado') return
+
+      const clientKey = getClientKey(order)
+      if (!clientKey) return
+
+      if (accountScope === 'single' && selectedAccountClientKey && clientKey !== selectedAccountClientKey) {
+        return
+      }
+
+      const financialSummary = getOrderFinancialSummary(order)
+      const total = toPositiveNumber(financialSummary?.finalTotal)
+      const paid = toPositiveNumber(financialSummary?.totalPaid)
+      const balance = Math.max(total - paid, 0)
+      const dateRef = order?.createdAt ?? order?.deliveryDate
+      const daysSinceOrder = getDaysBetween(dateRef, now)
+      const orderItems = Array.isArray(order?.items) ? order.items : []
+      const productsLabel = orderItems
+        .map((item) => {
+          const productId = String(item?.productId ?? '').trim()
+          const knownProduct = productsById[productId]
+          const itemName = String(
+            knownProduct?.name ?? item?.productName ?? item?.product ?? 'Producto sin nombre',
+          ).trim()
+          const quantity = toPositiveNumber(item?.quantity)
+          if (!itemName) return null
+          return `${itemName} x${quantity}`
+        })
+        .filter(Boolean)
+        .join(' | ')
+
+      rows.push({
+        clientKey,
+        orderId: String(order?.id ?? `PED-${orderIndex + 1}`),
+        clientName: getClientDisplayName(order),
+        dateLabel: formatDateDDMMYYYY(dateRef),
+        timeLabel: formatTime(dateRef),
+        productsLabel,
+        total,
+        paid,
+        balance,
+        daysSinceOrder,
+      })
+    })
+
+    return rows.sort((a, b) => {
+      if (a.clientName !== b.clientName) {
+        return String(a.clientName).localeCompare(String(b.clientName), 'es', { sensitivity: 'base' })
+      }
+
+      return b.daysSinceOrder - a.daysSinceOrder
+    })
+  }, [accountScope, productsById, safeOrders, selectedAccountClientKey])
+
+  const stockRows = useMemo(() => {
+    const stockMap = getStockMapByProductId(safeProducts, safeOrders)
+
+    return safeProducts
+      .map((product) => {
+        const productId = String(product?.id ?? '')
+        const stockCurrent = Number(stockMap?.[productId]?.stockDisponible ?? product?.stockTotal ?? 0)
+        return {
+          id: productId,
+          name: String(product?.name ?? 'Sin nombre'),
+          stockCurrent,
+        }
+      })
+      .sort((a, b) => {
+        if (a.stockCurrent !== b.stockCurrent) return a.stockCurrent - b.stockCurrent
+        return String(a.name).localeCompare(String(b.name), 'es', { sensitivity: 'base' })
+      })
+  }, [safeOrders, safeProducts])
+
+  const expensesRows = useMemo(
+    () =>
+      [...safeExpenses]
+        .map((expense) => ({
+          id: String(expense?.id ?? ''),
+          dateLabel: formatDate(expense?.date),
+          timestamp: new Date(expense?.date).getTime(),
+          type: String(expense?.type ?? 'empresa').trim().toLowerCase() === 'socio' ? 'socio' : 'empresa',
+          person: String(expense?.person ?? '').trim().toUpperCase() || null,
+          category: String(expense?.category ?? 'Sin categoria').trim() || 'Sin categoria',
+          reason: String(expense?.reason ?? expense?.description ?? '').trim(),
+          description: String(expense?.description ?? expense?.reason ?? '').trim(),
+          amount: toPositiveNumber(expense?.amount),
+        }))
+        .sort((a, b) => {
+          const aTs = Number.isNaN(a.timestamp) ? 0 : a.timestamp
+          const bTs = Number.isNaN(b.timestamp) ? 0 : b.timestamp
+          return bTs - aTs
+        }),
+    [safeExpenses],
+  )
+
+  const expensesSummaryByPartner = useMemo(() => {
+    const totals = {
+      DAMIAN: 0,
+      FRANCO: 0,
+    }
+
+    expensesRows.forEach((row) => {
+      if (row.type !== 'socio') return
+      const partner = String(row.person ?? '').trim().toUpperCase()
+      if (!Object.hasOwn(totals, partner)) return
+      totals[partner] += toPositiveNumber(row.amount)
+    })
+
+    return Object.keys(totals)
+      .map((partner) => ({
+        partner,
+        amount: totals[partner],
+      }))
+      .filter((row) => row.amount > 0)
+      .sort((a, b) => b.amount - a.amount)
+  }, [expensesRows])
+
+  const expensesSummaryByCategory = useMemo(() => {
+    const totals = {}
+
+    expensesRows.forEach((row) => {
+      const category = String(row.category ?? '').trim() || 'Sin categoria'
+      totals[category] = (totals[category] ?? 0) + toPositiveNumber(row.amount)
+    })
+
+    return Object.keys(totals)
+      .map((category) => ({
+        category,
+        amount: totals[category],
+      }))
+      .sort((a, b) => {
+        if (b.amount !== a.amount) return b.amount - a.amount
+        return String(a.category).localeCompare(String(b.category), 'es', { sensitivity: 'base' })
+      })
+  }, [expensesRows])
+
+  const productionRows = useMemo(() => {
+    const productsById = safeProducts.reduce((acc, product) => {
+      const productId = String(product?.id ?? '').trim()
+      if (!productId) return acc
+      acc[productId] = product
+      return acc
+    }, {})
+
+    const totalsByCategory = {}
+    const totalsByMonth = {}
+    let totalProduced = 0
+
+    safeOrders.forEach((order) => {
+      if (String(order?.status ?? '') !== 'Entregado') return
+
+      const items = Array.isArray(order?.items) ? order.items : []
+      const monthKey = getMonthKeyFromOrder(order)
+      const monthRow = totalsByMonth[monthKey] ?? {
+        monthKey,
+        monthLabel: getMonthLabel(monthKey),
+        totalQuantity: 0,
+        orders: new Set(),
+        categories: new Set(),
+      }
+
+      items.forEach((item) => {
+        const quantity = toPositiveNumber(item?.quantity)
+        if (quantity <= 0) return
+
+        const productId = String(item?.productId ?? '').trim()
+        const product = productsById[productId]
+        const category = getCategoryLabel(product?.category)
+
+        totalProduced += quantity
+        totalsByCategory[category] = (totalsByCategory[category] ?? 0) + quantity
+        monthRow.totalQuantity += quantity
+        monthRow.orders.add(String(order?.id ?? ''))
+        monthRow.categories.add(category)
+      })
+
+      totalsByMonth[monthKey] = monthRow
+    })
+
+    const categoryRows = Object.keys(totalsByCategory)
+      .map((category) => ({
+        category,
+        totalQuantity: totalsByCategory[category],
+      }))
+      .sort((a, b) => {
+        if (b.totalQuantity !== a.totalQuantity) return b.totalQuantity - a.totalQuantity
+        return String(a.category).localeCompare(String(b.category), 'es', { sensitivity: 'base' })
+      })
+
+    const monthRows = Object.values(totalsByMonth)
+      .map((row) => ({
+        monthKey: row.monthKey,
+        monthLabel: row.monthLabel,
+        totalQuantity: row.totalQuantity,
+        ordersCount: row.orders.size,
+        categoriesCount: row.categories.size,
+      }))
+      .sort((a, b) => String(a.monthKey).localeCompare(String(b.monthKey), 'es', { sensitivity: 'base' }))
+
+    return {
+      totalProduced,
+      categoryRows,
+      monthRows,
+    }
+  }, [safeOrders, safeProducts])
 
   const costRows = useMemo(
     () =>
@@ -283,16 +580,38 @@ function ReportsPage({ products, orders, clients, onSaveProduct }) {
   }
 
   const handleMissingCostsChange = (rowId, field, value) => {
+    let autoSavePayload = null
+
     setMissingCostsModal((prev) => ({
       ...prev,
       rows: prev.rows.map((row) => {
         if (row.id !== rowId) return row
-        return {
+
+        const nextRow = {
           ...row,
           [field]: value,
         }
+
+        autoSavePayload = nextRow
+        return nextRow
       }),
     }))
+
+    if (!autoSavePayload) return
+
+    const productId = String(autoSavePayload.id ?? '')
+    const baseProduct = productsById[productId]
+    if (!productId || !baseProduct || typeof onSaveProduct !== 'function') return
+
+    onSaveProduct({
+      id: String(baseProduct.id),
+      name: String(baseProduct.name ?? ''),
+      category: String(baseProduct.category ?? ''),
+      stockMinimo: toPositiveNumber(baseProduct.stockMinimo),
+      referenceCost: toPositiveNumber(autoSavePayload.referenceCost),
+      salePrice: toPositiveNumber(autoSavePayload.salePrice),
+      image: String(baseProduct.image ?? ''),
+    })
   }
 
   const handleGenerateCostsReport = () => {
@@ -306,7 +625,11 @@ function ReportsPage({ products, orders, clients, onSaveProduct }) {
       }))
 
     if (missingRows.length > 0) {
-      window.alert('⚠ Producto sin costo o precio cargado')
+      if (!hasShownMissingCostsWarning) {
+        window.alert('⚠ Producto sin costo o precio cargado')
+        setHasShownMissingCostsWarning(true)
+      }
+
       setMissingCostsModal({
         isOpen: true,
         rows: missingRows,
@@ -341,6 +664,7 @@ function ReportsPage({ products, orders, clients, onSaveProduct }) {
           stockMinimo: toPositiveNumber(baseProduct.stockMinimo),
           referenceCost: nextReferenceCost,
           salePrice: nextSalePrice,
+          image: String(baseProduct.image ?? ''),
         })
       }
     })
@@ -481,6 +805,136 @@ function ReportsPage({ products, orders, clients, onSaveProduct }) {
               disabled={debtRows.length === 0}
             >
               Reporte de deudas
+            </button>
+          </div>
+        </section>
+
+        <section className="card-block">
+          <div className="card-head">
+            <h3>Estado de cuenta cliente</h3>
+          </div>
+          <div className="reports-controls">
+            <label>
+              <input
+                type="radio"
+                name="account-scope"
+                checked={accountScope === 'single'}
+                onChange={() => setAccountScope('single')}
+              />{' '}
+              Seleccionar cliente
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="account-scope"
+                checked={accountScope === 'all'}
+                onChange={() => setAccountScope('all')}
+              />{' '}
+              Todos los clientes
+            </label>
+          </div>
+          {accountScope === 'single' && (
+            <div className="reports-controls">
+              <label>
+                Cliente{' '}
+                <select
+                  className="inline-select"
+                  value={selectedAccountClientKey}
+                  onChange={(event) => setSelectedAccountClientKey(event.target.value)}
+                >
+                  <option value="">Seleccionar cliente</option>
+                  {accountClientOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+          <p className="muted-label">Pedidos: {accountRows.length}</p>
+          <div className="product-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() =>
+                generateClientAccountPDF({
+                  rows: accountRows,
+                  scopeLabel: accountScope === 'all' ? 'Todos los clientes' : 'Cliente seleccionado',
+                })
+              }
+              disabled={accountRows.length === 0 || (accountScope === 'single' && !selectedAccountClientKey)}
+            >
+              Generar estado de cuenta PDF
+            </button>
+          </div>
+        </section>
+
+        <section className="card-block">
+          <div className="card-head">
+            <h3>Estado de stock</h3>
+          </div>
+          <p className="muted-label">Productos ordenados por menor stock disponible.</p>
+          <div className="product-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => generateStockStatusPDF({ rows: stockRows })}
+              disabled={stockRows.length === 0}
+            >
+              Exportar estado de stock
+            </button>
+          </div>
+        </section>
+
+        <section className="card-block">
+          <div className="card-head">
+            <h3>Egresos</h3>
+          </div>
+          <p className="muted-label">Fuente: packya_expenses.</p>
+          <p className="muted-label">Registros: {expensesRows.length}</p>
+          <p className="muted-label">Resumen por socio: {expensesSummaryByPartner.length}</p>
+          <p className="muted-label">Resumen por categoría: {expensesSummaryByCategory.length}</p>
+          <div className="product-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() =>
+                generateExpensesReportPDF({
+                  rows: expensesRows,
+                  summaryByPartner: expensesSummaryByPartner,
+                  summaryByCategory: expensesSummaryByCategory,
+                })
+              }
+              disabled={expensesRows.length === 0}
+            >
+              Exportar egresos PDF
+            </button>
+          </div>
+        </section>
+
+        <section className="card-block">
+          <div className="card-head">
+            <h3>Producción</h3>
+          </div>
+          <p className="muted-label">Cálculo basado en pedidos entregados.</p>
+          <p className="muted-label">Cantidad producida: {productionRows.totalProduced}</p>
+          <p className="muted-label">Categorías: {productionRows.categoryRows.length}</p>
+          <p className="muted-label">Meses: {productionRows.monthRows.length}</p>
+          <div className="product-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() =>
+                generateProductionReportPDF({
+                  monthRows: productionRows.monthRows,
+                  categoryRows: productionRows.categoryRows,
+                  totalProduced: productionRows.totalProduced,
+                })
+              }
+              disabled={productionRows.totalProduced <= 0}
+            >
+              Exportar producción PDF
             </button>
           </div>
         </section>

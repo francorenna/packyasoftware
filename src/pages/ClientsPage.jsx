@@ -28,6 +28,21 @@ const createInitialForm = () => ({
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
 const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
 
+const getPaymentStatus = (paid, balance) => {
+  const safePaid = Number(paid) || 0
+  const safeBalance = Number(balance) || 0
+
+  if (safeBalance === 0) return 'Pagado'
+  if (safePaid > 0 && safeBalance > 0) return 'Parcial'
+  return 'Pendiente'
+}
+
+const getPaymentStatusClass = (status) => {
+  if (status === 'Pagado') return 'badge-paid'
+  if (status === 'Parcial') return 'badge-partial'
+  return 'badge-pending'
+}
+
 const toTimestamp = (value) => {
   const parsed = new Date(value)
   const timestamp = parsed.getTime()
@@ -542,13 +557,31 @@ function ClientsPage({
                                   <p><strong>Notas:</strong> {client.notes || '-'}</p>
                                 </div>
 
-                                <div className="card-block">
-                                  <p><strong>Total facturado:</strong> {formatCurrency(stats?.totalFacturado ?? 0)}</p>
-                                  <p><strong>Total pagado:</strong> {formatCurrency(stats?.totalPagado ?? 0)}</p>
-                                  <p><strong>Deuda total:</strong> {formatCurrency(stats?.totalPendiente ?? 0)}</p>
-                                  <p><strong>Pedidos activos:</strong> {stats?.activeOrdersCount ?? 0}</p>
-                                  <p><strong>Pedidos entregados sin pagar:</strong> {deliveredUnpaidCount}</p>
-                                  <p><strong>Último pedido:</strong> {stats?.lastOrderId || '-'}</p>
+                                <div className="client-summary-cards">
+                                  <div className="client-summary-card facturado">
+                                    <p className="client-summary-label">Facturado</p>
+                                    <p className="client-summary-value">{formatCurrency(stats?.totalFacturado ?? 0)}</p>
+                                  </div>
+                                  <div className="client-summary-card pagado">
+                                    <p className="client-summary-label">Pagado</p>
+                                    <p className="client-summary-value">{formatCurrency(stats?.totalPagado ?? 0)}</p>
+                                  </div>
+                                  <div className="client-summary-card deuda">
+                                    <p className="client-summary-label">Deuda</p>
+                                    <p className="client-summary-value">{formatCurrency(stats?.totalPendiente ?? 0)}</p>
+                                  </div>
+                                  <div className="client-summary-card">
+                                    <p className="client-summary-label">Pedidos activos</p>
+                                    <p className="client-summary-value">{stats?.activeOrdersCount ?? 0}</p>
+                                  </div>
+                                  <div className="client-summary-card">
+                                    <p className="client-summary-label">Entregados sin pagar</p>
+                                    <p className="client-summary-value">{deliveredUnpaidCount}</p>
+                                  </div>
+                                  <div className="client-summary-card">
+                                    <p className="client-summary-label">Último pedido</p>
+                                    <p className="client-summary-value">{stats?.lastOrderId || '-'}</p>
+                                  </div>
                                 </div>
                               </div>
 
@@ -562,25 +595,35 @@ function ClientsPage({
                                       <th>Total</th>
                                       <th>Pagado</th>
                                       <th>Saldo</th>
+                                      <th>Estado</th>
                                       <th>Cuenta corriente</th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {expandedOrdersTimeline.map((row) => (
-                                      <tr key={row.id}>
-                                        <td>{row.id}</td>
-                                        <td>{formatDate(row.createdAt)}</td>
-                                        <td>{formatDate(row.deliveryDate)}</td>
-                                        <td>{formatCurrency(row.total)}</td>
-                                        <td>{formatCurrency(row.paid)}</td>
-                                        <td>{formatCurrency(row.balance)}</td>
-                                        <td>{formatCurrency(row.currentAccount)}</td>
-                                      </tr>
-                                    ))}
+                                    {expandedOrdersTimeline.map((row) => {
+                                      const paymentStatus = getPaymentStatus(row.paid, row.balance)
+
+                                      return (
+                                        <tr key={row.id}>
+                                          <td>{row.id}</td>
+                                          <td>{formatDate(row.createdAt)}</td>
+                                          <td>{formatDate(row.deliveryDate)}</td>
+                                          <td>{formatCurrency(row.total)}</td>
+                                          <td>{formatCurrency(row.paid)}</td>
+                                          <td>{formatCurrency(row.balance)}</td>
+                                          <td>
+                                            <span className={`payment-status-badge ${getPaymentStatusClass(paymentStatus)}`}>
+                                              {paymentStatus}
+                                            </span>
+                                          </td>
+                                          <td>{formatCurrency(row.currentAccount)}</td>
+                                        </tr>
+                                      )
+                                    })}
 
                                     {expandedOrdersTimeline.length === 0 && (
                                       <tr>
-                                        <td colSpan={7} className="empty-detail">
+                                        <td colSpan={8} className="empty-detail">
                                           Este cliente no tiene pedidos.
                                         </td>
                                       </tr>
@@ -591,7 +634,7 @@ function ClientsPage({
 
                               {accountOrderOptions.length > 0 && (
                                 <div className="client-actions-grid">
-                                  <div className="card-block">
+                                  <div className="card-block client-action-card client-action-primary">
                                     <h4>Registrar pago</h4>
                                     <label>
                                       Pedido
@@ -638,8 +681,37 @@ function ClientsPage({
                                     </button>
                                   </div>
 
-                                  <div className="card-block">
-                                    <h4>Ajuste manual (+/-)</h4>
+                                  <div className="card-block client-action-card client-action-neutral">
+                                    <h4>Agregar observación</h4>
+                                    <label>
+                                      Pedido
+                                      <select
+                                        value={observationDraft.orderId || defaultOrderOptionId}
+                                        onChange={(event) => setObservationDraft((prev) => ({ ...prev, orderId: event.target.value }))}
+                                      >
+                                        {accountOrderOptions.map((option) => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label>
+                                      Observación
+                                      <input
+                                        type="text"
+                                        value={observationDraft.note}
+                                        onChange={(event) => setObservationDraft((prev) => ({ ...prev, note: event.target.value }))}
+                                        placeholder="Observación administrativa"
+                                      />
+                                    </label>
+                                    <button type="button" className="secondary-btn" onClick={addObservation}>
+                                      Guardar observación
+                                    </button>
+                                  </div>
+
+                                  <div className="card-block client-action-card client-action-secondary">
+                                    <h4 title="Permite corregir saldos manualmente (errores administrativos)">Ajuste administrativo</h4>
+                                    <p className="payment-helper">Uso interno para correcciones. No representa un pago real.</p>
+                                    <p className="payment-error">⚠ Esto no modifica pagos reales del cliente</p>
                                     <label>
                                       Pedido
                                       <select
@@ -669,35 +741,8 @@ function ClientsPage({
                                         placeholder="Motivo del ajuste"
                                       />
                                     </label>
-                                    <button type="button" className="primary-btn" onClick={registerAdjustment}>
+                                    <button type="button" className="secondary-btn" onClick={registerAdjustment}>
                                       Aplicar ajuste
-                                    </button>
-                                  </div>
-
-                                  <div className="card-block">
-                                    <h4>Agregar observación</h4>
-                                    <label>
-                                      Pedido
-                                      <select
-                                        value={observationDraft.orderId || defaultOrderOptionId}
-                                        onChange={(event) => setObservationDraft((prev) => ({ ...prev, orderId: event.target.value }))}
-                                      >
-                                        {accountOrderOptions.map((option) => (
-                                          <option key={option.id} value={option.id}>{option.label}</option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <label>
-                                      Observación
-                                      <input
-                                        type="text"
-                                        value={observationDraft.note}
-                                        onChange={(event) => setObservationDraft((prev) => ({ ...prev, note: event.target.value }))}
-                                        placeholder="Observación administrativa"
-                                      />
-                                    </label>
-                                    <button type="button" className="secondary-btn" onClick={addObservation}>
-                                      Guardar observación
                                     </button>
                                   </div>
                                 </div>

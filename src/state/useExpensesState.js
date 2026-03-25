@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 
 const EXPENSES_STORAGE_KEY = 'packya_expenses'
+const EXPENSE_TYPES = ['empresa', 'socio']
+const EXPENSE_PARTNERS = ['FRANCO', 'DAMIAN']
 
 const toPositiveNumber = (value) => {
   const parsed = Number(value)
@@ -35,16 +37,29 @@ const normalizeExpense = (expense, index) => {
   if (!expense || typeof expense !== 'object') return null
 
   const amount = toPositiveNumber(expense.amount)
-  const category = String(expense.category ?? '').trim()
-  const description = String(expense.description ?? '').trim()
+  const rawType = String(expense.type ?? '').trim().toLowerCase()
+  const type = EXPENSE_TYPES.includes(rawType) ? rawType : 'empresa'
+  const rawPerson = String(expense.person ?? '').trim().toUpperCase()
+  const person = type === 'socio' && EXPENSE_PARTNERS.includes(rawPerson) ? rawPerson : null
+
+  const reason = String(expense.reason ?? expense.description ?? '').trim()
+  const description = reason
+  const categoryFromData = String(expense.category ?? '').trim()
+  const category = type === 'socio'
+    ? 'Retiro socio'
+    : categoryFromData
   const date = toDateKey(expense.date)
 
-  if (amount <= 0 || !category || !description || !date) return null
+  if (amount <= 0 || !description || !date) return null
+  if (type === 'empresa' && !category) return null
 
   return {
     id: String(expense.id ?? `EXP-${Date.now()}-${index + 1}`),
+    type,
+    person,
     amount,
     category,
+    reason,
     description,
     date,
     note: String(expense.note ?? '').trim(),

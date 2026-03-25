@@ -54,6 +54,12 @@ const toPositiveNumber = (value) => {
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
 }
 
+const normalizeImage = (value) => {
+  if (typeof value !== 'string') return ''
+  const normalized = value.trim()
+  return normalized.startsWith('data:image/') ? normalized : ''
+}
+
 const normalizeCategory = (value) => {
   const normalized = String(value ?? '').trim().toUpperCase()
   return PRODUCT_CATEGORIES.includes(normalized) ? normalized : ''
@@ -133,6 +139,7 @@ const normalizeProduct = (product, index) => {
     stockMinimo: toPositiveInteger(product.stockMinimo),
     referenceCost: toPositiveNumber(product.referenceCost ?? product.lastUnitCost),
     salePrice: toPositiveNumber(product.salePrice ?? product.unitPrice),
+    image: normalizeImage(product.image),
     stockMovements,
   }
 }
@@ -264,6 +271,7 @@ function useProductsState() {
       stockMinimo: toPositiveInteger(productData.stockMinimo),
       referenceCost: toPositiveNumber(productData.referenceCost),
       salePrice: toPositiveNumber(productData.salePrice),
+      image: normalizeImage(productData.image),
     }
 
     setProducts((prevProducts) => {
@@ -276,6 +284,7 @@ function useProductsState() {
         stockTotal: existingProduct?.stockTotal ?? 0,
         referenceCost: normalizedProductBase.referenceCost,
         salePrice: normalizedProductBase.salePrice,
+        image: normalizedProductBase.image || normalizeImage(existingProduct?.image),
         stockMovements: existingProduct?.stockMovements ?? [],
       }
 

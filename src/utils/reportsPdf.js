@@ -43,6 +43,44 @@ const formatDateOnly = (value = new Date()) => {
   return formatted.replace(/\b([a-z])/u, (match) => match.toUpperCase())
 }
 
+const parseAccountRowDate = (row) => {
+  const directCandidates = [row?.dateIso, row?.createdAt, row?.deliveryDate, row?.date]
+
+  for (const candidate of directCandidates) {
+    if (!candidate) continue
+    const parsed = new Date(candidate)
+    if (!Number.isNaN(parsed.getTime())) return parsed
+  }
+
+  const label = String(row?.dateLabel ?? '').trim()
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(label)) {
+    const [day, month, year] = label.split('/').map(Number)
+    const parsed = new Date(year, month - 1, day)
+    if (!Number.isNaN(parsed.getTime())) return parsed
+  }
+
+  return null
+}
+
+const getMonthKeyFromDate = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return 'Sin mes'
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+const formatMonthKey = (monthKey) => {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey ?? ''))) return 'Sin mes'
+  const [year, month] = String(monthKey).split('-').map(Number)
+  const parsed = new Date(year, month - 1, 1)
+  if (Number.isNaN(parsed.getTime())) return 'Sin mes'
+
+  return parsed.toLocaleDateString('es-AR', {
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
 const drawHeader = (doc, title, subtitle) => {
   const pageWidth = doc.internal.pageSize.getWidth()
   const margin = 14
@@ -122,6 +160,14 @@ const ensureSpace = (doc, cursorY, needed, columns) => {
   doc.addPage()
   const nextStart = drawHeader(doc, columns.pageTitle, columns.pageSubtitle)
   return drawTableHeader(doc, nextStart, columns.columns)
+}
+
+const ensurePageSpaceWithoutTable = (doc, cursorY, needed, pageTitle, pageSubtitle) => {
+  const pageHeight = doc.internal.pageSize.getHeight()
+  if (cursorY + needed <= pageHeight - 16) return cursorY
+
+  doc.addPage()
+  return drawHeader(doc, pageTitle, pageSubtitle)
 }
 
 export const generatePriceListPDF = ({ rows }) => {
@@ -340,6 +386,7 @@ export const generateDebtPDF = ({ rows }) => {
   cursorY = drawTableHeader(doc, cursorY, columns)
 
   const sortedRows = [...rows].sort((a, b) => b.totalDebt - a.totalDebt)
+  const totalGeneralDebt = sortedRows.reduce((acc, row) => acc + (Number(row?.totalDebt) || 0), 0)
 
   sortedRows.forEach((row) => {
     cursorY = ensureSpace(doc, cursorY, 10, {
@@ -356,5 +403,372 @@ export const generateDebtPDF = ({ rows }) => {
     })
   })
 
+  cursorY = ensurePageSpaceWithoutTable(doc, cursorY + 6, 12, 'Reporte de Deudas', subtitle)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(15, 23, 42)
+  doc.text(`TOTAL GENERAL DEUDA: ${formatCurrency(totalGeneralDebt)}`, 14, cursorY)
+
   doc.save(`Packya-Deudas-${toFileDate()}.pdf`)
+}
+
+export const generateClientAccountPDF = ({ rows, scopeLabel }) => {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const subtitle = `Estado de cuenta (${scopeLabel}) | ${formatDateTime(new Date())}`
+  let cursorY = drawHeader(doc, 'Estado de Cuenta Cliente', subtitle)
+
+  const groupedRows = rows.reduce((acc, row) => {
+    const key = String(row?.clientKey ?? row?.clientName ?? 'Sin cliente')
+    if (!acc[key]) {
+      acc[key] = {
+        clientName: String(row?.clientName ?? 'Sin cliente'),
+        items: [],
+      }
+    }
+
+    acc[key].items.push(row)
+    return acc
+  }, {})
+
+  const sortedGroups = Object.values(groupedRows).sort((a, b) =>
+    String(a.clientName).localeCompare(String(b.clientName), 'es', { sensitivity: 'base' }),
+  )
+
+  let totalAdeudado = 0
+
+  const monthlyColumns = [
+    { key: 'month', label: 'Mes', width: 58, align: 'left' },
+    { key: 'orders', label: 'Pedidos', width: 22, align: 'right' },
+    { key: 'billed', label: 'Facturado', width: 36, align: 'right' },
+    { key: 'paid', label: 'Pagado', width: 34, align: 'right' },
+    { key: 'balance', label: 'Saldo mes', width: 32, align: 'right' },
+  ]
+
+  sortedGroups.forEach((group, groupIndex) => {
+    const clientRows = Array.isArray(group.items) ? group.items : []
+
+    const monthlyMap = clientRows.reduce((acc, row) => {
+      const total = Math.max(Number(row?.total) || 0, 0)
+      const paid = Math.max(Number(row?.paid) || 0, 0)
+      const balance = Math.max(total - paid, 0)
+
+      const rowDate = parseAccountRowDate(row)
+      const monthKey = getMonthKeyFromDate(rowDate)
+
+      const monthBucket = acc[monthKey] ?? {
+        month: formatMonthKey(monthKey),
+        monthSortKey: monthKey,
+        orders: 0,
+        billed: 0,
+        paid: 0,
+        balance: 0,
+      }
+
+      monthBucket.orders += 1
+      monthBucket.billed += total
+      monthBucket.paid += paid
+      monthBucket.balance += balance
+      acc[monthKey] = monthBucket
+      return acc
+    }, {})
+
+    const monthlyRows = Object.values(monthlyMap).sort((a, b) =>
+      String(b.monthSortKey).localeCompare(String(a.monthSortKey)),
+    )
+
+    const clientTotals = monthlyRows.reduce(
+      (acc, row) => ({
+        orders: acc.orders + row.orders,
+        billed: acc.billed + row.billed,
+        paid: acc.paid + row.paid,
+        balance: acc.balance + row.balance,
+      }),
+      { orders: 0, billed: 0, paid: 0, balance: 0 },
+    )
+
+    totalAdeudado += clientTotals.balance
+
+    cursorY = ensurePageSpaceWithoutTable(doc, cursorY, 30, 'Estado de Cuenta Cliente', subtitle)
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(11)
+    doc.setTextColor(15, 23, 42)
+    doc.text(`Cliente: ${group.clientName}`, 14, cursorY)
+    cursorY += 6
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.5)
+    doc.setTextColor(51, 65, 85)
+    doc.text(`Pedidos registrados: ${clientTotals.orders}`, 14, cursorY)
+    doc.text(`Saldo actual: ${formatCurrency(clientTotals.balance)}`, 196, cursorY, { align: 'right' })
+    cursorY += 8
+
+    cursorY = ensureSpace(doc, cursorY, 12, {
+      pageTitle: 'Estado de Cuenta Cliente',
+      pageSubtitle: subtitle,
+      columns: monthlyColumns,
+    })
+    cursorY = drawTableHeader(doc, cursorY, monthlyColumns)
+
+    monthlyRows.forEach((row) => {
+      cursorY = ensureSpace(doc, cursorY, 10, {
+        pageTitle: 'Estado de Cuenta Cliente',
+        pageSubtitle: subtitle,
+        columns: monthlyColumns,
+      })
+
+      cursorY = drawRow(doc, cursorY, monthlyColumns, {
+        month: row.month,
+        orders: String(row.orders),
+        billed: formatCurrency(row.billed),
+        paid: formatCurrency(row.paid),
+        balance: formatCurrency(row.balance),
+      })
+    })
+
+    cursorY = ensurePageSpaceWithoutTable(doc, cursorY + 2, 12, 'Estado de Cuenta Cliente', subtitle)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9.5)
+    doc.setTextColor(15, 23, 42)
+    doc.text(
+      `Resumen cliente  Facturado: ${formatCurrency(clientTotals.billed)}   Pagado: ${formatCurrency(clientTotals.paid)}   Saldo: ${formatCurrency(clientTotals.balance)}`,
+      14,
+      cursorY,
+    )
+    cursorY += 7
+
+    if (groupIndex < sortedGroups.length - 1) {
+      doc.setDrawColor(226, 232, 240)
+      doc.line(14, cursorY, 196, cursorY)
+      cursorY += 6
+    }
+  })
+
+  cursorY = ensurePageSpaceWithoutTable(doc, cursorY + 2, 14, 'Estado de Cuenta Cliente', subtitle)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(12)
+  doc.setTextColor(15, 23, 42)
+  doc.text(`TOTAL ADEUDADO: ${formatCurrency(totalAdeudado)}`, 14, cursorY)
+
+  doc.save(`Packya-EstadoCuenta-${toFileDate()}.pdf`)
+}
+
+export const generateStockStatusPDF = ({ rows }) => {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const subtitle = `Estado de stock | ${formatDateTime(new Date())}`
+  const columns = [
+    { key: 'product', label: 'Producto', width: 132, align: 'left' },
+    { key: 'stock', label: 'Stock actual', width: 44, align: 'right' },
+  ]
+
+  let cursorY = drawHeader(doc, 'Estado de Stock', subtitle)
+  cursorY = drawTableHeader(doc, cursorY, columns)
+
+  rows.forEach((row) => {
+    cursorY = ensureSpace(doc, cursorY, 10, {
+      pageTitle: 'Estado de Stock',
+      pageSubtitle: subtitle,
+      columns,
+    })
+
+    cursorY = drawRow(doc, cursorY, columns, {
+      product: String(row.name ?? 'Sin nombre'),
+      stock: String(row.stockCurrent ?? 0),
+    })
+  })
+
+  cursorY = ensurePageSpaceWithoutTable(doc, cursorY + 6, 12, 'Estado de Stock', subtitle)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(15, 23, 42)
+  doc.text(`TOTAL PRODUCTOS: ${String(rows.length)}`, 14, cursorY)
+
+  doc.save(`Packya-Stock-${toFileDate()}.pdf`)
+}
+
+export const generateExpensesReportPDF = ({ rows, summaryByPartner = [], summaryByCategory = [] }) => {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const subtitle = `Reporte de egresos | ${formatDateTime(new Date())}`
+  const columns = [
+    { key: 'date', label: 'Fecha', width: 22, align: 'left' },
+    { key: 'type', label: 'Tipo', width: 18, align: 'left' },
+    { key: 'person', label: 'Socio', width: 22, align: 'left' },
+    { key: 'category', label: 'Categoria', width: 30, align: 'left' },
+    { key: 'reason', label: 'Motivo', width: 58, align: 'left' },
+    { key: 'amount', label: 'Monto', width: 26, align: 'right' },
+  ]
+
+  let cursorY = drawHeader(doc, 'Reporte de Egresos', subtitle)
+  cursorY = drawTableHeader(doc, cursorY, columns)
+  const totalExpenses = rows.reduce((acc, row) => acc + (Number(row?.amount) || 0), 0)
+
+  rows.forEach((row) => {
+    cursorY = ensureSpace(doc, cursorY, 10, {
+      pageTitle: 'Reporte de Egresos',
+      pageSubtitle: subtitle,
+      columns,
+    })
+
+    cursorY = drawRow(doc, cursorY, columns, {
+      date: String(row.dateLabel ?? 'Sin fecha'),
+      type: row.type === 'socio' ? 'Socio' : 'Empresa',
+      person: String(row.person ?? '—'),
+      category: String(row.category ?? 'Sin categoria'),
+      reason: String(row.reason ?? row.description ?? ''),
+      amount: formatCurrency(row.amount),
+    })
+  })
+
+  cursorY += 4
+  const summaryColumns = [
+    { key: 'label', label: 'Resumen', width: 120, align: 'left' },
+    { key: 'amount', label: 'Monto', width: 56, align: 'right' },
+  ]
+
+  if (summaryByPartner.length > 0) {
+    cursorY = ensureSpace(doc, cursorY, 20, {
+      pageTitle: 'Reporte de Egresos',
+      pageSubtitle: subtitle,
+      columns: summaryColumns,
+    })
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(51, 65, 85)
+    doc.text('Resumen por socio', 14, cursorY)
+    cursorY += 5
+    cursorY = drawTableHeader(doc, cursorY, summaryColumns)
+
+    summaryByPartner.forEach((row) => {
+      cursorY = ensureSpace(doc, cursorY, 10, {
+        pageTitle: 'Reporte de Egresos',
+        pageSubtitle: subtitle,
+        columns: summaryColumns,
+      })
+
+      cursorY = drawRow(doc, cursorY, summaryColumns, {
+        label: String(row.partner ?? 'Sin socio'),
+        amount: formatCurrency(row.amount),
+      })
+    })
+  }
+
+  if (summaryByCategory.length > 0) {
+    cursorY += 4
+    cursorY = ensureSpace(doc, cursorY, 20, {
+      pageTitle: 'Reporte de Egresos',
+      pageSubtitle: subtitle,
+      columns: summaryColumns,
+    })
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(51, 65, 85)
+    doc.text('Resumen por categoria', 14, cursorY)
+    cursorY += 5
+    cursorY = drawTableHeader(doc, cursorY, summaryColumns)
+
+    summaryByCategory.forEach((row) => {
+      cursorY = ensureSpace(doc, cursorY, 10, {
+        pageTitle: 'Reporte de Egresos',
+        pageSubtitle: subtitle,
+        columns: summaryColumns,
+      })
+
+      cursorY = drawRow(doc, cursorY, summaryColumns, {
+        label: String(row.category ?? 'Sin categoria'),
+        amount: formatCurrency(row.amount),
+      })
+    })
+  }
+
+  cursorY = ensurePageSpaceWithoutTable(doc, cursorY + 6, 12, 'Reporte de Egresos', subtitle)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(15, 23, 42)
+  doc.text(`TOTAL EGRESOS: ${formatCurrency(totalExpenses)}`, 14, cursorY)
+
+  doc.save(`Packya-Egresos-${toFileDate()}.pdf`)
+}
+
+export const generateProductionReportPDF = ({ monthRows, categoryRows, totalProduced }) => {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const subtitle = `Reporte de produccion | ${formatDateTime(new Date())}`
+
+  let cursorY = drawHeader(doc, 'Reporte de Produccion', subtitle)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(15, 23, 42)
+  doc.text(`Cantidad total producida: ${String(totalProduced ?? 0)}`, 14, cursorY)
+  cursorY += 8
+
+  const monthColumns = [
+    { key: 'month', label: 'Mes', width: 90, align: 'left' },
+    { key: 'quantity', label: 'Cantidad', width: 30, align: 'right' },
+    { key: 'orders', label: 'Pedidos', width: 30, align: 'right' },
+    { key: 'categories', label: 'Categorias', width: 26, align: 'right' },
+  ]
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  doc.setTextColor(51, 65, 85)
+  doc.text('Produccion por mes', 14, cursorY)
+  cursorY += 5
+  cursorY = drawTableHeader(doc, cursorY, monthColumns)
+
+  monthRows.forEach((row) => {
+    cursorY = ensureSpace(doc, cursorY, 10, {
+      pageTitle: 'Reporte de Produccion',
+      pageSubtitle: subtitle,
+      columns: monthColumns,
+    })
+
+    cursorY = drawRow(doc, cursorY, monthColumns, {
+      month: String(row.monthLabel ?? row.monthKey ?? ''),
+      quantity: String(row.totalQuantity ?? 0),
+      orders: String(row.ordersCount ?? 0),
+      categories: String(row.categoriesCount ?? 0),
+    })
+  })
+
+  cursorY += 6
+  cursorY = ensureSpace(doc, cursorY, 18, {
+    pageTitle: 'Reporte de Produccion',
+    pageSubtitle: subtitle,
+    columns: monthColumns,
+  })
+
+  const categoryColumns = [
+    { key: 'category', label: 'Categoria', width: 120, align: 'left' },
+    { key: 'quantity', label: 'Cantidad', width: 56, align: 'right' },
+  ]
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  doc.setTextColor(51, 65, 85)
+  doc.text('Produccion por categoria', 14, cursorY)
+  cursorY += 5
+  cursorY = drawTableHeader(doc, cursorY, categoryColumns)
+
+  categoryRows.forEach((row) => {
+    cursorY = ensureSpace(doc, cursorY, 10, {
+      pageTitle: 'Reporte de Produccion',
+      pageSubtitle: subtitle,
+      columns: categoryColumns,
+    })
+
+    cursorY = drawRow(doc, cursorY, categoryColumns, {
+      category: String(row.category ?? 'Sin categoria'),
+      quantity: String(row.totalQuantity ?? 0),
+    })
+  })
+
+  cursorY = ensurePageSpaceWithoutTable(doc, cursorY + 6, 12, 'Reporte de Produccion', subtitle)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(15, 23, 42)
+  doc.text(`TOTAL PRODUCCION: ${String(totalProduced ?? 0)} unidades`, 14, cursorY)
+
+  doc.save(`Packya-Produccion-${toFileDate()}.pdf`)
 }

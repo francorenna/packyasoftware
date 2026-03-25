@@ -83,6 +83,7 @@ function OrdersList({
   onUpdateOrderDelivery,
   onUpdateOrderClient,
   onUpdateOrderItems,
+  onUpdateOrderItemCompletion,
   onUpdateOrderUrgency,
   onDeleteCancelledOrder,
 }) {
@@ -701,6 +702,11 @@ function OrdersList({
                 onUpdateOrderUrgency?.(orderId, !isUrgent)
               }
 
+              const handleToggleItemCompleted = (event, itemIndex, nextCompleted) => {
+                event.stopPropagation()
+                onUpdateOrderItemCompletion?.(orderId, itemIndex, nextCompleted)
+              }
+
               return (
                 <Fragment key={orderId}>
                   <tr
@@ -764,10 +770,25 @@ function OrdersList({
                                 items.map((item, index) => {
                                   const itemSubtotal = Number(item.quantity || 0) * Number(item.unitPrice || 0)
                                   const isClientMaterial = Boolean(item?.isClientMaterial ?? false)
+                                  const itemCompleted = Boolean(item?.itemCompleted ?? false)
+                                  const canTrackProgress = orderStatus === 'En Proceso'
                                   return (
                                     <tr key={`${orderId}-item-${index}`}>
                                       <td>
                                         <div className="order-item-product-cell">
+                                          {canTrackProgress && (
+                                            <label className="order-item-progress-check">
+                                              <input
+                                                type="checkbox"
+                                                checked={itemCompleted}
+                                                onChange={(event) =>
+                                                  handleToggleItemCompleted(event, index, event.target.checked)
+                                                }
+                                                aria-label={`Marcar progreso de ${item.productName || item.product || 'ítem'}`}
+                                              />
+                                              <span>{itemCompleted ? 'Completado' : 'Pendiente'}</span>
+                                            </label>
+                                          )}
                                           <span>{item.productName || item.product || 'Sin producto'}</span>
                                           {isClientMaterial && (
                                             <span className="item-client-material-badge">

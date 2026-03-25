@@ -7,7 +7,8 @@ import {
 import { buildMonthlyProfit } from '../utils/profit'
 import { getMonthlyProductionClosure } from '../utils/production'
 
-const expenseCategories = ['Servicios', 'Transporte', 'Impuestos', 'Sueldos', 'Mantenimiento', 'Otros']
+const companyExpenseCategories = ['Insumos', 'Reparación', 'Alquiler', 'Servicios', 'Otros']
+const partnerOptions = ['DAMIAN', 'FRANCO']
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -61,9 +62,11 @@ function FinancePage({
   const [movementFilter, setMovementFilter] = useState('Todos')
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false)
   const [expenseForm, setExpenseForm] = useState(() => ({
+    type: 'empresa',
+    person: null,
     amount: '',
-    category: expenseCategories[0],
-    description: '',
+    category: companyExpenseCategories[0],
+    reason: '',
     date: getTodayDateKey(),
     note: '',
   }))
@@ -146,9 +149,11 @@ function FinancePage({
 
   const openExpenseModal = () => {
     setExpenseForm({
+      type: 'empresa',
+      person: null,
       amount: '',
-      category: expenseCategories[0],
-      description: '',
+      category: companyExpenseCategories[0],
+      reason: '',
       date: getTodayDateKey(),
       note: '',
     })
@@ -163,16 +168,33 @@ function FinancePage({
 
   const handleSaveExpense = () => {
     const normalizedAmount = Number(expenseForm.amount)
-    const normalizedDescription = String(expenseForm.description ?? '').trim()
+    const normalizedReason = String(expenseForm.reason ?? '').trim()
     const normalizedDate = String(expenseForm.date ?? '').trim()
+    const normalizedType = String(expenseForm.type ?? 'empresa').trim().toLowerCase() === 'socio' ? 'socio' : 'empresa'
+    const normalizedPerson = normalizedType === 'socio'
+      ? String(expenseForm.person ?? '').trim().toUpperCase()
+      : null
+    const normalizedCategory = normalizedType === 'empresa'
+      ? String(expenseForm.category ?? companyExpenseCategories[0]).trim()
+      : 'Retiro socio'
 
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
       setExpenseFormError('Ingresá un monto válido mayor a 0.')
       return
     }
 
-    if (!normalizedDescription) {
-      setExpenseFormError('Completá una descripción para el egreso.')
+    if (!normalizedReason) {
+      setExpenseFormError('Completá el motivo del egreso.')
+      return
+    }
+
+    if (normalizedType === 'socio' && !partnerOptions.includes(normalizedPerson)) {
+      setExpenseFormError('Seleccioná un socio para registrar el retiro.')
+      return
+    }
+
+    if (normalizedType === 'empresa' && !normalizedCategory) {
+      setExpenseFormError('Seleccioná una categoría para el egreso de empresa.')
       return
     }
 
@@ -182,9 +204,12 @@ function FinancePage({
     }
 
     const savedExpense = onAddExpense?.({
+      type: normalizedType,
+      person: normalizedPerson,
       amount: normalizedAmount,
-      category: String(expenseForm.category ?? expenseCategories[0]).trim(),
-      description: normalizedDescription,
+      category: normalizedCategory,
+      reason: normalizedReason,
+      description: normalizedReason,
       date: normalizedDate,
       note: String(expenseForm.note ?? '').trim(),
     })
@@ -297,8 +322,10 @@ function FinancePage({
             <thead>
               <tr>
                 <th>Fecha</th>
+                <th>Tipo</th>
+                <th>Socio</th>
                 <th>Categoría</th>
-                <th>Descripción</th>
+                <th>Motivo</th>
                 <th>Observación</th>
                 <th>Monto</th>
                 <th>Acción</th>
@@ -308,8 +335,10 @@ function FinancePage({
               {monthlyExpenses.map((expense) => (
                 <tr key={expense.id}>
                   <td>{formatDateTime(expense.date)}</td>
+                  <td>{expense.type === 'socio' ? 'Socio' : 'Empresa'}</td>
+                  <td>{expense.type === 'socio' ? String(expense.person ?? '—') : '—'}</td>
                   <td>{expense.category}</td>
-                  <td>{expense.description}</td>
+                  <td>{String(expense.reason ?? expense.description ?? '').trim() || '—'}</td>
                   <td>{expense.note || '—'}</td>
                   <td className="finance-result-negative">{formatCurrency(Number(expense.amount || 0))}</td>
                   <td>
@@ -326,7 +355,7 @@ function FinancePage({
 
               {monthlyExpenses.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="empty-detail">
+                  <td colSpan={8} className="empty-detail">
                     No hay egresos manuales registrados para el mes seleccionado.
                   </td>
                 </tr>
@@ -548,6 +577,45 @@ function FinancePage({
               </label>
 
               <label>
+                Tipo de egreso
+                <select
+                  value={expenseForm.type}
+                  onChange={(event) =>
+                    setExpenseForm((prev) => {
+                      const nextType = String(event.target.value ?? 'empresa') === 'socio' ? 'socio' : 'empresa'
+                      return {
+                        ...prev,
+                        type: nextType,
+                        person: nextType === 'socio' ? partnerOptions[0] : null,
+                        category: nextType === 'empresa' ? (prev.category || companyExpenseCategories[0]) : 'Retiro socio',
+                      }
+                    })
+                  }
+                >
+                  <option value="empresa">Empresa</option>
+                  <option value="socio">Socio</option>
+                </select>
+              </label>
+
+              {expenseForm.type === 'socio' ? (
+                <label>
+                  Socio
+                  <select
+                    value={String(expenseForm.person ?? '')}
+                    onChange={(event) =>
+                      setExpenseForm((prev) => ({ ...prev, person: String(event.target.value ?? '').trim().toUpperCase() }))
+                    }
+                  >
+                    <option value="">Seleccionar socio</option>
+                    {partnerOptions.map((partner) => (
+                      <option key={partner} value={partner}>
+                        {partner}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
                 Categoría
                 <select
                   value={expenseForm.category}
@@ -555,23 +623,24 @@ function FinancePage({
                     setExpenseForm((prev) => ({ ...prev, category: event.target.value }))
                   }
                 >
-                  {expenseCategories.map((category) => (
+                  {companyExpenseCategories.map((category) => (
                     <option key={category} value={category}>
                       {category}
                     </option>
                   ))}
                 </select>
               </label>
+              )}
 
               <label>
-                Descripción
+                Motivo
                 <input
                   type="text"
-                  value={expenseForm.description}
+                  value={expenseForm.reason}
                   onChange={(event) =>
-                    setExpenseForm((prev) => ({ ...prev, description: event.target.value }))
+                    setExpenseForm((prev) => ({ ...prev, reason: event.target.value }))
                   }
-                  placeholder="Descripción del egreso"
+                  placeholder="Motivo del egreso"
                   required
                 />
               </label>

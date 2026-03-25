@@ -70,6 +70,7 @@ function OrdersPage({
   onUpdateOrderDelivery,
   onUpdateOrderClient,
   onUpdateOrderItems,
+  onUpdateOrderItemCompletion,
   onUpdateOrderUrgency,
   onDeleteCancelledOrder,
   onCreateClient,
@@ -240,6 +241,7 @@ function OrdersPage({
             onUpdateOrderDelivery={onUpdateOrderDelivery}
             onUpdateOrderClient={onUpdateOrderClient}
             onUpdateOrderItems={onUpdateOrderItems}
+            onUpdateOrderItemCompletion={onUpdateOrderItemCompletion}
             onUpdateOrderUrgency={onUpdateOrderUrgency}
             onDeleteCancelledOrder={onDeleteCancelledOrder}
           />

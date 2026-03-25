@@ -31,6 +31,7 @@ const normalizeClient = (client, index) => {
     id: String(client.id ?? `CLI-${String(index + 1).padStart(3, '0')}`),
     name: String(client.name ?? '').trim(),
     phone: normalizePhone(client.phone),
+    email: String(client.email ?? '').trim(),
     address: String(client.address ?? '').trim(),
     notes: String(client.notes ?? '').trim(),
     createdAt: String(client.createdAt ?? new Date().toISOString()),
@@ -96,6 +97,7 @@ function useClientsState() {
       id: incomingId || `CLI-${Date.now()}`,
       name,
       phone: normalizePhone(safeClientData.phone),
+      email: String(safeClientData.email ?? '').trim(),
       address: String(safeClientData.address ?? '').trim(),
       notes: String(safeClientData.notes ?? '').trim(),
     }

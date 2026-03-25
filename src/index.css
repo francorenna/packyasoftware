@@ -65,11 +65,12 @@ textarea {
 }
 
 .urgent-badge {
-  background: #ffe2e2;
+  background: #ffe5e5;
   color: #b00020;
   font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 6px;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
 }
 
 .client-debt-badge {
@@ -631,6 +632,84 @@ textarea {
   flex-wrap: wrap;
 }
 
+.product-thumbnail {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+}
+
+.product-image-preview-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.image-status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.image-status-ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.image-status-empty {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.product-alert-inline {
+  display: inline-flex;
+  margin-left: 0.35rem;
+  color: #b45309;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.product-image-preview-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 0.6rem 0;
+}
+
+.product-image-preview-large {
+  width: min(100%, 520px);
+  max-height: 420px;
+  object-fit: contain;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.image-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.product-image-upload-row {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .card-head {
   display: flex;
   justify-content: space-between;
@@ -719,6 +798,32 @@ textarea {
 }
 .client-orders-table {
   margin-top: 0.3rem;
+}
+
+.client-accordion-panel {
+  display: grid;
+  gap: 0.8rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.7rem;
+  padding: 0.75rem;
+}
+
+.client-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.client-actions-grid h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 980px) {
+  .client-actions-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .clients-toolbar {
@@ -1014,6 +1119,15 @@ textarea {
 .order-item-product-cell {
   display: grid;
   gap: 0.18rem;
+}
+
+.order-item-progress-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  color: #475569;
+  width: fit-content;
 }
 
 .item-client-material-badge {

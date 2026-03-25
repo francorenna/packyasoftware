@@ -8,6 +8,7 @@ const createInitialForm = () => ({
   stockMinimo: 0,
   referenceCost: 0,
   salePrice: 0,
+  image: '',
 })
 
 const createInitialAdjustment = () => ({
@@ -72,6 +73,83 @@ const categoryClassNames = {
   OTRO: 'category-otro',
 }
 
+const IMAGE_MAX_BYTES = 200 * 1024
+
+const readFileAsDataURL = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(new Error('No se pudo leer la imagen.'))
+    reader.readAsDataURL(file)
+  })
+
+const loadImage = (src) =>
+  new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('No se pudo cargar la imagen.'))
+    image.src = src
+  })
+
+const canvasToDataUrl = (canvas, type, quality) =>
+  new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('No se pudo procesar la imagen.'))
+          return
+        }
+
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result ?? ''))
+        reader.onerror = () => reject(new Error('No se pudo procesar la imagen.'))
+        reader.readAsDataURL(blob)
+      },
+      type,
+      quality,
+    )
+  })
+
+const compressImageToBase64 = async (file) => {
+  const isSupportedType = ['image/jpeg', 'image/png'].includes(file?.type)
+  if (!isSupportedType) {
+    throw new Error('Solo se permiten imágenes JPG o PNG.')
+  }
+
+  const sourceDataUrl = await readFileAsDataURL(file)
+  const sourceImage = await loadImage(sourceDataUrl)
+
+  const maxSide = 1200
+  const scale = Math.min(1, maxSide / Math.max(sourceImage.width, sourceImage.height))
+  const width = Math.max(Math.round(sourceImage.width * scale), 1)
+  const height = Math.max(Math.round(sourceImage.height * scale), 1)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error('No se pudo preparar el compresor de imagen.')
+  }
+
+  context.drawImage(sourceImage, 0, 0, width, height)
+
+  let bestDataUrl = await canvasToDataUrl(canvas, 'image/jpeg', 0.85)
+  if (bestDataUrl.length <= IMAGE_MAX_BYTES * 1.37) {
+    return bestDataUrl
+  }
+
+  const qualitySteps = [0.75, 0.65, 0.55, 0.45]
+  for (const quality of qualitySteps) {
+    const candidate = await canvasToDataUrl(canvas, 'image/jpeg', quality)
+    bestDataUrl = candidate
+    if (candidate.length <= IMAGE_MAX_BYTES * 1.37) return candidate
+  }
+
+  return bestDataUrl
+}
+
 function ProductsPage({
   products,
   orders,
@@ -86,6 +164,8 @@ function ProductsPage({
   const [adjustingProductId, setAdjustingProductId] = useState(null)
   const [historyProductId, setHistoryProductId] = useState(null)
   const [adjustment, setAdjustment] = useState(createInitialAdjustment())
+  const [imageUploadError, setImageUploadError] = useState('')
+  const [previewImage, setPreviewImage] = useState({ isOpen: false, src: '', name: '' })
 
   const stockRows = useMemo(
     () => calculateStockSnapshot(products, orders),
@@ -145,9 +225,11 @@ function ProductsPage({
       stockMinimo: form.stockMinimo,
       referenceCost: form.referenceCost,
       salePrice: form.salePrice,
+      image: form.image,
     })
 
     setForm(createInitialForm())
+    setImageUploadError('')
   }
 
   const createQuickDraft = (product) => ({
@@ -156,7 +238,64 @@ function ProductsPage({
     stockMinimo: Math.max(Number(product?.stockMinimo || 0), 0),
     referenceCost: Math.max(Number(product?.referenceCost || 0), 0),
     salePrice: Math.max(Number(product?.salePrice || 0), 0),
+    image: String(product?.image ?? ''),
   })
+
+  const handleFormImageUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const image = await compressImageToBase64(file)
+      setForm((prev) => ({
+        ...prev,
+        image,
+      }))
+      setImageUploadError('')
+    } catch (error) {
+      setImageUploadError(String(error?.message ?? 'No se pudo cargar la imagen.'))
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const handleQuickImageUpload = async (productId, event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const image = await compressImageToBase64(file)
+      updateQuickDraft(productId, 'image', image)
+      setImageUploadError('')
+    } catch (error) {
+      setImageUploadError(String(error?.message ?? 'No se pudo cargar la imagen.'))
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const handleReplaceImage = async (product, event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const image = await compressImageToBase64(file)
+      onSaveProduct({
+        id: product.id,
+        name: product.name,
+        category: getCategoryFromProduct(product),
+        stockMinimo: Math.max(Number(product.stockMinimo || 0), 0),
+        referenceCost: Math.max(Number(product.referenceCost || 0), 0),
+        salePrice: Math.max(Number(product.salePrice || 0), 0),
+        image,
+      })
+      setImageUploadError('')
+    } catch (error) {
+      setImageUploadError(String(error?.message ?? 'No se pudo cargar la imagen.'))
+    } finally {
+      event.target.value = ''
+    }
+  }
 
   const openQuickEdit = (product) => {
     if (!product?.id) return
@@ -185,6 +324,7 @@ function ProductsPage({
         stockMinimo: 0,
         referenceCost: 0,
         salePrice: 0,
+        image: '',
       }
 
       const normalizedValue = field === 'name'
@@ -218,6 +358,7 @@ function ProductsPage({
       stockMinimo: Math.max(Number(draft.stockMinimo || 0), 0),
       referenceCost: Math.max(Number(draft.referenceCost || 0), 0),
       salePrice: Math.max(Number(draft.salePrice || 0), 0),
+      image: String(draft.image ?? ''),
     })
 
     onUpdateProductReferenceCost?.(product.id, Math.max(Number(draft.referenceCost || 0), 0))
@@ -351,6 +492,27 @@ function ProductsPage({
                 Agregar producto
               </button>
             </div>
+
+            <div className="product-image-upload-row">
+              <label className="secondary-btn upload-btn" htmlFor="new-product-image-input">
+                Subir imagen
+              </label>
+              <input
+                id="new-product-image-input"
+                type="file"
+                accept="image/png,image/jpeg"
+                onChange={handleFormImageUpload}
+                className="image-file-input"
+              />
+              <p className="payment-helper">Formatos: JPG/PNG. Tamaño recomendado: hasta 200kb.</p>
+              <span className={`image-status-badge ${form.image ? 'image-status-ok' : 'image-status-empty'}`}>
+                {form.image ? 'Imagen cargada' : 'Sin imagen'}
+              </span>
+              {form.image ? (
+                <img src={form.image} alt="Vista previa" className="product-thumbnail" />
+              ) : null}
+              {imageUploadError ? <p className="payment-error">{imageUploadError}</p> : null}
+            </div>
           </form>
         </section>
 
@@ -398,6 +560,24 @@ function ProductsPage({
                                 >
                                   {getCategoryFromProduct(product)}
                                 </span>
+                                <span className={`image-status-badge ${product.image ? 'image-status-ok' : 'image-status-empty'}`}>
+                                  {product.image ? 'Imagen cargada' : 'Sin imagen'}
+                                </span>
+                                {product.image ? (
+                                  <button
+                                    type="button"
+                                    className="product-image-preview-btn"
+                                    onClick={() =>
+                                      setPreviewImage({
+                                        isOpen: true,
+                                        src: String(product.image ?? ''),
+                                        name: String(product.name ?? 'Producto'),
+                                      })
+                                    }
+                                  >
+                                    <img src={product.image} alt="Producto" className="product-thumbnail" />
+                                  </button>
+                                ) : null}
                                 <span>{product.name}</span>
                               </span>
                             )}
@@ -413,7 +593,12 @@ function ProductsPage({
                                 onChange={(event) => updateQuickDraft(product.id, 'referenceCost', event.target.value)}
                               />
                             ) : (
-                              Number(product.referenceCost || 0)
+                              <span>
+                                {Number(product.referenceCost || 0)}
+                                {Number(product.referenceCost || 0) === 0 ? (
+                                  <span className="product-alert-inline">⚠ Sin costo</span>
+                                ) : null}
+                              </span>
                             )}
                           </td>
                           <td>
@@ -426,7 +611,12 @@ function ProductsPage({
                                 onChange={(event) => updateQuickDraft(product.id, 'salePrice', event.target.value)}
                               />
                             ) : (
-                              Number(product.salePrice || 0)
+                              <span>
+                                {Number(product.salePrice || 0)}
+                                {Number(product.salePrice || 0) === 0 ? (
+                                  <span className="product-alert-inline">⚠ Sin precio</span>
+                                ) : null}
+                              </span>
                             )}
                           </td>
                           <td>{product.stockDisponible}</td>
@@ -477,6 +667,16 @@ function ProductsPage({
                                   >
                                     Guardar
                                   </button>
+                                  <label className="quick-fill-btn upload-btn" htmlFor={`quick-image-${product.id}`}>
+                                    Subir imagen
+                                  </label>
+                                  <input
+                                    id={`quick-image-${product.id}`}
+                                    type="file"
+                                    accept="image/png,image/jpeg"
+                                    onChange={(event) => handleQuickImageUpload(product.id, event)}
+                                    className="image-file-input"
+                                  />
                                   <button
                                     type="button"
                                     className="quick-fill-btn"
@@ -486,6 +686,16 @@ function ProductsPage({
                                   </button>
                                 </>
                               )}
+                              <label className="quick-fill-btn upload-btn" htmlFor={`replace-image-${product.id}`}>
+                                Cambiar imagen
+                              </label>
+                              <input
+                                id={`replace-image-${product.id}`}
+                                type="file"
+                                accept="image/png,image/jpeg"
+                                onChange={(event) => handleReplaceImage(product, event)}
+                                className="image-file-input"
+                              />
                               <button
                                 type="button"
                                 className="quick-fill-btn"
@@ -634,6 +844,25 @@ function ProductsPage({
                 )}
               </tbody>
             </table>
+          </div>
+        </section>
+      )}
+
+      {previewImage.isOpen && (
+        <section className="dashboard-recent">
+          <div className="card-head">
+            <h3>Preview de imagen · {previewImage.name}</h3>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => setPreviewImage({ isOpen: false, src: '', name: '' })}
+            >
+              Cerrar
+            </button>
+          </div>
+
+          <div className="product-image-preview-wrap">
+            <img src={previewImage.src} alt={previewImage.name} className="product-image-preview-large" />
           </div>
         </section>
       )}

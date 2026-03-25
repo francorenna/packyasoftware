@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
-import { getClientStatsMap } from '../utils/clients'
-import { generateClientStatementPDF } from '../utils/pdf'
+import { Fragment, useMemo, useState } from 'react'
+import { getOrderFinancialSummary } from '../utils/finance'
+import { generateClientAccountPDF } from '../utils/reportsPdf'
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -20,54 +20,150 @@ const createInitialForm = () => ({
   id: '',
   name: '',
   phone: '',
+  email: '',
   address: '',
   notes: '',
 })
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
-const toPositiveNumber = (value) => {
-  const parsed = Number(value)
-  return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
+const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
+
+const toTimestamp = (value) => {
+  const parsed = new Date(value)
+  const timestamp = parsed.getTime()
+  return Number.isNaN(timestamp) ? 0 : timestamp
 }
 
-function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
+const normalizeName = (value) => String(value ?? '').trim().toLowerCase()
+
+const isOrderFromClient = (order, client) => {
+  const orderClientId = String(order?.clientId ?? '').trim()
+  const clientId = String(client?.id ?? '').trim()
+  if (orderClientId && clientId) return orderClientId === clientId
+
+  const orderClientName = normalizeName(order?.clientName ?? order?.client)
+  const clientName = normalizeName(client?.name)
+  return Boolean(orderClientName && clientName && orderClientName === clientName)
+}
+
+const getDaysBetween = (value, now) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 0
+  const diffMs = now.getTime() - date.getTime()
+  return Math.max(Math.floor(diffMs / (1000 * 60 * 60 * 24)), 0)
+}
+
+const buildClientOrdersTimeline = (client, orders) => {
+  const safeOrders = Array.isArray(orders) ? orders : []
+
+  const rows = safeOrders
+    .filter((order) => !order?.isSample)
+    .filter((order) => isOrderFromClient(order, client))
+    .map((order) => {
+      const financial = getOrderFinancialSummary(order)
+      const status = String(order?.status ?? '')
+      const isCancelled = status === 'Cancelado'
+      const total = isCancelled ? 0 : Number(financial.finalTotal || 0)
+      const paid = isCancelled ? 0 : Number(financial.totalPaid || 0)
+      const balance = isCancelled ? 0 : Number(financial.remainingDebt || 0)
+
+      return {
+        id: String(order?.id ?? ''),
+        status,
+        createdAt: String(order?.createdAt ?? ''),
+        deliveryDate: String(order?.deliveryDate ?? ''),
+        total,
+        paid,
+        balance,
+        order,
+      }
+    })
+    .sort((a, b) => toTimestamp(a.createdAt || a.deliveryDate) - toTimestamp(b.createdAt || b.deliveryDate))
+
+  let runningBalance = 0
+  return rows.map((row) => {
+    runningBalance += row.balance
+    return {
+      ...row,
+      currentAccount: runningBalance,
+    }
+  })
+}
+
+function ClientsPage({
+  clients,
+  orders,
+  onSaveClient,
+  onDeleteClient,
+  onRegisterPayment,
+  onRegisterOrderAdjustment,
+  onAddOrderObservation,
+}) {
   const [form, setForm] = useState(createInitialForm())
   const [editingId, setEditingId] = useState(null)
-  const [selectedClientId, setSelectedClientId] = useState(null)
+  const [expandedClientId, setExpandedClientId] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [listFilter, setListFilter] = useState('all')
+  const [paymentDraft, setPaymentDraft] = useState({ orderId: '', amount: '', method: paymentMethods[0], note: '' })
+  const [adjustmentDraft, setAdjustmentDraft] = useState({ orderId: '', amount: '', note: '' })
+  const [observationDraft, setObservationDraft] = useState({ orderId: '', note: '' })
 
   const safeClients = Array.isArray(clients) ? clients : []
   const safeOrders = Array.isArray(orders) ? orders : []
 
-  const statsMap = useMemo(
-    () => getClientStatsMap(safeClients, safeOrders),
-    [safeClients, safeOrders],
+  const statsMap = useMemo(() => {
+    const map = safeClients.reduce((acc, client) => {
+      acc[client.id] = {
+        totalFacturado: 0,
+        totalPagado: 0,
+        totalPendiente: 0,
+        activeOrdersCount: 0,
+        lastOrderId: '',
+        lastOrderDate: '',
+      }
+      return acc
+    }, {})
+
+    safeClients.forEach((client) => {
+      const timeline = buildClientOrdersTimeline(client, safeOrders)
+      timeline.forEach((row) => {
+        map[client.id].totalFacturado += row.total
+        map[client.id].totalPagado += row.paid
+        map[client.id].totalPendiente += row.balance
+
+        if (!['Entregado', 'Cancelado'].includes(row.status)) {
+          map[client.id].activeOrdersCount += 1
+        }
+
+        const rowDate = row.deliveryDate || row.createdAt
+        if (toTimestamp(rowDate) >= toTimestamp(map[client.id].lastOrderDate)) {
+          map[client.id].lastOrderDate = rowDate
+          map[client.id].lastOrderId = row.id
+        }
+      })
+    })
+
+    return map
+  }, [safeClients, safeOrders])
+
+  const expandedClient = useMemo(
+    () => safeClients.find((client) => client.id === expandedClientId) ?? null,
+    [expandedClientId, safeClients],
   )
 
-  const selectedClient = useMemo(
-    () => safeClients.find((client) => client.id === selectedClientId) ?? null,
-    [safeClients, selectedClientId],
+  const expandedOrdersTimeline = useMemo(
+    () => (expandedClient ? buildClientOrdersTimeline(expandedClient, safeOrders) : []),
+    [expandedClient, safeOrders],
   )
-
-  const selectedStats = selectedClient ? statsMap[selectedClient.id] : null
 
   const deliveredUnpaidCount = useMemo(() => {
-    if (!selectedStats) return 0
+    if (expandedOrdersTimeline.length === 0) return 0
 
-    return selectedStats.orders.reduce((acc, order) => {
-      const orderStatus = String(order?.status ?? '')
-      if (orderStatus !== 'Entregado') return acc
-
-      const total = toPositiveNumber(order?.total)
-      const totalPaid = (Array.isArray(order?.payments) ? order.payments : []).reduce(
-        (sum, payment) => sum + toPositiveNumber(payment?.amount),
-        0,
-      )
-      const remainingDebt = Math.max(total - totalPaid, 0)
-      return remainingDebt > 0 ? acc + 1 : acc
+    return expandedOrdersTimeline.reduce((acc, row) => {
+      if (row.status !== 'Entregado') return acc
+      return row.balance > 0 ? acc + 1 : acc
     }, 0)
-  }, [selectedStats])
+  }, [expandedOrdersTimeline])
 
   const filteredClients = useMemo(() => {
     const query = searchTerm.trim().toLowerCase()
@@ -77,13 +173,14 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
       const matchesQuery =
         !query ||
         client.name.toLowerCase().includes(query) ||
-        String(client.phone ?? '').toLowerCase().includes(query)
+        String(client.phone ?? '').toLowerCase().includes(query) ||
+        String(client.email ?? '').toLowerCase().includes(query)
 
       if (!matchesQuery) return false
       if (listFilter === 'debt') return (stats?.totalPendiente ?? 0) > 0
       if (listFilter === 'active') return (stats?.activeOrdersCount ?? 0) > 0
       return true
-    })
+    }).sort((a, b) => String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }))
   }, [listFilter, safeClients, searchTerm, statsMap])
 
   const handleInput = (field, value) => {
@@ -103,12 +200,13 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
       id: editingId ?? undefined,
       name: form.name,
       phone: normalizedPhone,
+      email: String(form.email ?? '').trim(),
       address: form.address,
       notes: form.notes,
     })
 
     if (saved?.id) {
-      setSelectedClientId(saved.id)
+      setExpandedClientId(saved.id)
     }
 
     setEditingId(null)
@@ -117,11 +215,12 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
 
   const handleEdit = (client) => {
     setEditingId(client.id)
-    setSelectedClientId(client.id)
+    setExpandedClientId(client.id)
     setForm({
       id: client.id,
       name: client.name,
       phone: client.phone,
+      email: client.email,
       address: client.address,
       notes: client.notes,
     })
@@ -142,8 +241,8 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
     if (!confirmed) return
 
     onDeleteClient(client.id)
-    if (selectedClientId === client.id) {
-      setSelectedClientId(null)
+    if (expandedClientId === client.id) {
+      setExpandedClientId(null)
     }
     if (editingId === client.id) {
       setEditingId(null)
@@ -154,6 +253,117 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
   const handleCancelEdit = () => {
     setEditingId(null)
     setForm(createInitialForm())
+  }
+
+  const registerPayment = () => {
+    const latestOrder = expandedOrdersTimeline[expandedOrdersTimeline.length - 1]
+    const fallbackOrderId = String(latestOrder?.id ?? '')
+    const orderId = String(paymentDraft.orderId || fallbackOrderId).trim()
+    const amount = Number(paymentDraft.amount)
+    const note = String(paymentDraft.note ?? '').trim()
+
+    if (!orderId || !Number.isFinite(amount) || amount <= 0) return
+
+    onRegisterPayment?.(orderId, {
+      amount,
+      method: paymentDraft.method,
+      note,
+    })
+
+    setPaymentDraft((prev) => ({
+      ...prev,
+      amount: '',
+      note: '',
+    }))
+  }
+
+  const registerAdjustment = () => {
+    const latestOrder = expandedOrdersTimeline[expandedOrdersTimeline.length - 1]
+    const fallbackOrderId = String(latestOrder?.id ?? '')
+    const orderId = String(adjustmentDraft.orderId || fallbackOrderId).trim()
+    const amount = Number(adjustmentDraft.amount)
+    const note = String(adjustmentDraft.note ?? '').trim()
+
+    if (!orderId || !Number.isFinite(amount) || amount === 0 || !note) return
+
+    onRegisterOrderAdjustment?.(orderId, {
+      amount,
+      note,
+    })
+
+    setAdjustmentDraft((prev) => ({
+      ...prev,
+      amount: '',
+      note: '',
+    }))
+  }
+
+  const addObservation = () => {
+    const latestOrder = expandedOrdersTimeline[expandedOrdersTimeline.length - 1]
+    const fallbackOrderId = String(latestOrder?.id ?? '')
+    const orderId = String(observationDraft.orderId || fallbackOrderId).trim()
+    const note = String(observationDraft.note ?? '').trim()
+    if (!orderId || !note) return
+
+    onAddOrderObservation?.(orderId, note)
+    setObservationDraft((prev) => ({
+      ...prev,
+      note: '',
+    }))
+  }
+
+  const accountOrderOptions = expandedOrdersTimeline
+    .slice()
+    .reverse()
+    .map((row) => ({
+      id: row.id,
+      label: `${row.id} · ${formatDate(row.createdAt)} · Saldo ${formatCurrency(row.balance)}`,
+    }))
+
+  const defaultOrderOptionId = String(
+    accountOrderOptions[0]?.id ?? expandedOrdersTimeline[expandedOrdersTimeline.length - 1]?.id ?? '',
+  )
+
+  const generateAccountPdf = () => {
+    if (!expandedClient) return
+
+    const now = new Date()
+    const rows = expandedOrdersTimeline.map((row) => {
+      const items = Array.isArray(row.order?.items) ? row.order.items : []
+      const productsLabel = items
+        .map((item) => {
+          const name = String(item?.productName ?? item?.product ?? '').trim()
+          const quantity = Number(item?.quantity || 0)
+          if (!name) return null
+          return `${name} x${quantity}`
+        })
+        .filter(Boolean)
+        .join(' | ')
+
+      return {
+        clientKey: `id:${expandedClient.id}`,
+        orderId: row.id,
+        clientName: expandedClient.name,
+        dateLabel: formatDate(row.createdAt),
+        timeLabel: formatDate(row.createdAt) === 'Sin fecha'
+          ? 'Sin hora'
+          : new Date(row.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        productsLabel,
+        total: row.total,
+        paid: row.paid,
+        balance: row.balance,
+        daysSinceOrder: getDaysBetween(row.createdAt || row.deliveryDate, now),
+      }
+    })
+
+    try {
+      generateClientAccountPDF({
+        rows,
+        scopeLabel: expandedClient.name,
+      })
+    } catch {
+      window.alert('No se pudo generar el estado de cuenta del cliente.')
+    }
   }
 
   return (
@@ -185,6 +395,14 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
                 type="text"
                 value={form.phone}
                 onChange={(event) => handleInput('phone', event.target.value)}
+              />
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                value={form.email}
+                onChange={(event) => handleInput('email', event.target.value)}
               />
             </label>
             <label>
@@ -261,6 +479,7 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
                 <tr>
                   <th>Nombre</th>
                   <th>Teléfono</th>
+                  <th>Email</th>
                   <th>Deuda actual</th>
                   <th>Último pedido</th>
                   <th></th>
@@ -269,37 +488,231 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
               <tbody>
                 {filteredClients.map((client) => {
                   const stats = statsMap[client.id]
+                  const isExpanded = expandedClientId === client.id
+
                   return (
-                    <tr key={client.id}>
-                      <td>
-                        <button
-                          type="button"
-                          className="quick-fill-btn"
-                          onClick={() => setSelectedClientId(client.id)}
-                        >
-                          {client.name}
-                        </button>
-                      </td>
-                      <td>{client.phone || '-'}</td>
-                      <td>{formatCurrency(stats?.totalPendiente ?? 0)}</td>
-                      <td>{stats?.lastOrderId || '-'}</td>
-                      <td>
-                        <div className="product-row-actions">
-                          <button type="button" className="quick-fill-btn" onClick={() => handleEdit(client)}>
-                            Editar
+                    <Fragment key={client.id}>
+                      <tr>
+                        <td>
+                          <button
+                            type="button"
+                            className="quick-fill-btn"
+                            onClick={() => setExpandedClientId((currentId) => (currentId === client.id ? null : client.id))}
+                          >
+                            {client.name}
                           </button>
-                          <button type="button" className="quick-fill-btn" onClick={() => handleDelete(client)}>
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                        <td>{client.phone || '-'}</td>
+                        <td>{client.email || '-'}</td>
+                        <td>{formatCurrency(stats?.totalPendiente ?? 0)}</td>
+                        <td>{stats?.lastOrderId || '-'}</td>
+                        <td>
+                          <div className="product-row-actions">
+                            <button type="button" className="quick-fill-btn" onClick={() => handleEdit(client)}>
+                              Editar
+                            </button>
+                            <button type="button" className="quick-fill-btn" onClick={() => handleDelete(client)}>
+                              Eliminar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={6}>
+                            <div className="client-accordion-panel">
+                              <div className="card-head">
+                                <h3>Ficha de cliente · {client.name}</h3>
+                                <button
+                                  type="button"
+                                  className="secondary-btn"
+                                  onClick={generateAccountPdf}
+                                >
+                                  Generar estado de cuenta
+                                </button>
+                              </div>
+
+                              <div className="client-detail-grid">
+                                <div className="card-block">
+                                  <p><strong>Nombre:</strong> {client.name}</p>
+                                  <p><strong>Teléfono:</strong> {client.phone || '-'}</p>
+                                  <p><strong>Email:</strong> {client.email || '-'}</p>
+                                  <p><strong>Dirección:</strong> {client.address || '-'}</p>
+                                  <p><strong>Notas:</strong> {client.notes || '-'}</p>
+                                </div>
+
+                                <div className="card-block">
+                                  <p><strong>Total facturado:</strong> {formatCurrency(stats?.totalFacturado ?? 0)}</p>
+                                  <p><strong>Total pagado:</strong> {formatCurrency(stats?.totalPagado ?? 0)}</p>
+                                  <p><strong>Deuda total:</strong> {formatCurrency(stats?.totalPendiente ?? 0)}</p>
+                                  <p><strong>Pedidos activos:</strong> {stats?.activeOrdersCount ?? 0}</p>
+                                  <p><strong>Pedidos entregados sin pagar:</strong> {deliveredUnpaidCount}</p>
+                                  <p><strong>Último pedido:</strong> {stats?.lastOrderId || '-'}</p>
+                                </div>
+                              </div>
+
+                              <div className="table-wrap client-orders-table">
+                                <table className="products-table">
+                                  <thead>
+                                    <tr>
+                                      <th>ID</th>
+                                      <th>Fecha creación</th>
+                                      <th>Fecha entrega</th>
+                                      <th>Total</th>
+                                      <th>Pagado</th>
+                                      <th>Saldo</th>
+                                      <th>Cuenta corriente</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {expandedOrdersTimeline.map((row) => (
+                                      <tr key={row.id}>
+                                        <td>{row.id}</td>
+                                        <td>{formatDate(row.createdAt)}</td>
+                                        <td>{formatDate(row.deliveryDate)}</td>
+                                        <td>{formatCurrency(row.total)}</td>
+                                        <td>{formatCurrency(row.paid)}</td>
+                                        <td>{formatCurrency(row.balance)}</td>
+                                        <td>{formatCurrency(row.currentAccount)}</td>
+                                      </tr>
+                                    ))}
+
+                                    {expandedOrdersTimeline.length === 0 && (
+                                      <tr>
+                                        <td colSpan={7} className="empty-detail">
+                                          Este cliente no tiene pedidos.
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              {accountOrderOptions.length > 0 && (
+                                <div className="client-actions-grid">
+                                  <div className="card-block">
+                                    <h4>Registrar pago</h4>
+                                    <label>
+                                      Pedido
+                                      <select
+                                        value={paymentDraft.orderId || defaultOrderOptionId}
+                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, orderId: event.target.value }))}
+                                      >
+                                        {accountOrderOptions.map((option) => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label>
+                                      Monto
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={paymentDraft.amount}
+                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, amount: event.target.value }))}
+                                      />
+                                    </label>
+                                    <label>
+                                      Método
+                                      <select
+                                        value={paymentDraft.method}
+                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, method: event.target.value }))}
+                                      >
+                                        {paymentMethods.map((method) => (
+                                          <option key={method} value={method}>{method}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label>
+                                      Observación
+                                      <input
+                                        type="text"
+                                        value={paymentDraft.note}
+                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, note: event.target.value }))}
+                                        placeholder="Ej: Pago parcial en efectivo"
+                                      />
+                                    </label>
+                                    <button type="button" className="primary-btn" onClick={registerPayment}>
+                                      Registrar pago
+                                    </button>
+                                  </div>
+
+                                  <div className="card-block">
+                                    <h4>Ajuste manual (+/-)</h4>
+                                    <label>
+                                      Pedido
+                                      <select
+                                        value={adjustmentDraft.orderId || defaultOrderOptionId}
+                                        onChange={(event) => setAdjustmentDraft((prev) => ({ ...prev, orderId: event.target.value }))}
+                                      >
+                                        {accountOrderOptions.map((option) => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label>
+                                      Monto ajuste
+                                      <input
+                                        type="number"
+                                        value={adjustmentDraft.amount}
+                                        onChange={(event) => setAdjustmentDraft((prev) => ({ ...prev, amount: event.target.value }))}
+                                        placeholder="Ej: 1500 o -800"
+                                      />
+                                    </label>
+                                    <label>
+                                      Motivo
+                                      <input
+                                        type="text"
+                                        value={adjustmentDraft.note}
+                                        onChange={(event) => setAdjustmentDraft((prev) => ({ ...prev, note: event.target.value }))}
+                                        placeholder="Motivo del ajuste"
+                                      />
+                                    </label>
+                                    <button type="button" className="primary-btn" onClick={registerAdjustment}>
+                                      Aplicar ajuste
+                                    </button>
+                                  </div>
+
+                                  <div className="card-block">
+                                    <h4>Agregar observación</h4>
+                                    <label>
+                                      Pedido
+                                      <select
+                                        value={observationDraft.orderId || defaultOrderOptionId}
+                                        onChange={(event) => setObservationDraft((prev) => ({ ...prev, orderId: event.target.value }))}
+                                      >
+                                        {accountOrderOptions.map((option) => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label>
+                                      Observación
+                                      <input
+                                        type="text"
+                                        value={observationDraft.note}
+                                        onChange={(event) => setObservationDraft((prev) => ({ ...prev, note: event.target.value }))}
+                                        placeholder="Observación administrativa"
+                                      />
+                                    </label>
+                                    <button type="button" className="secondary-btn" onClick={addObservation}>
+                                      Guardar observación
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   )
                 })}
 
                 {safeClients.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="empty-detail">
+                    <td colSpan={6} className="empty-detail">
                       No hay clientes registrados.
                     </td>
                   </tr>
@@ -307,7 +720,7 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
 
                 {safeClients.length > 0 && filteredClients.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="empty-detail">
+                    <td colSpan={6} className="empty-detail">
                       No hay resultados para los filtros aplicados.
                     </td>
                   </tr>
@@ -317,88 +730,6 @@ function ClientsPage({ clients, orders, onSaveClient, onDeleteClient }) {
           </div>
         </section>
       </div>
-
-      {selectedClient && selectedStats && (
-        <section className="dashboard-recent">
-          <div className="card-head">
-            <h3>Ficha de cliente · {selectedClient.name}</h3>
-            <button
-              type="button"
-              className="secondary-btn"
-              onClick={() => {
-                generateClientStatementPDF(selectedClient, selectedStats.orders).catch(() => {
-                  window.alert('No se pudo generar el estado de cuenta del cliente.')
-                })
-              }}
-            >
-              📄 Generar estado de cuenta
-            </button>
-          </div>
-
-          <div className="client-detail-grid">
-            <div className="card-block">
-              <p><strong>Teléfono:</strong> {selectedClient.phone || '-'}</p>
-              <p><strong>Dirección:</strong> {selectedClient.address || '-'}</p>
-              <p><strong>Notas:</strong> {selectedClient.notes || '-'}</p>
-              <p><strong>Alta:</strong> {formatDate(selectedClient.createdAt)}</p>
-            </div>
-
-            <div className="card-block">
-              <p><strong>Total facturado:</strong> {formatCurrency(selectedStats.totalFacturado)}</p>
-              <p><strong>Total pagado:</strong> {formatCurrency(selectedStats.totalPagado)}</p>
-              <p><strong>Total pendiente:</strong> {formatCurrency(selectedStats.totalPendiente)}</p>
-              <p>
-                <strong>Total adeudado actual:</strong>{' '}
-                <span className={selectedStats.totalPendiente > 0 ? 'finance-result-negative' : ''}>
-                  {formatCurrency(selectedStats.totalPendiente)}
-                </span>
-              </p>
-              <p>
-                <strong>Pedidos entregados sin pagar:</strong> {deliveredUnpaidCount}
-              </p>
-              <p><strong>Última compra:</strong> {formatDate(selectedStats.lastOrderDate)}</p>
-            </div>
-          </div>
-
-          <div className="table-wrap client-orders-table">
-            <table className="products-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Entrega</th>
-                  <th>Estado</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedStats.orders
-                  .slice()
-                  .sort(
-                    (a, b) =>
-                      new Date(b.deliveryDate || 0).getTime() -
-                      new Date(a.deliveryDate || 0).getTime(),
-                  )
-                  .map((order) => (
-                    <tr key={order.id}>
-                      <td>{order.id}</td>
-                      <td>{formatDate(order.deliveryDate)}</td>
-                      <td>{order.status}</td>
-                      <td>{formatCurrency(Number(order.total || 0))}</td>
-                    </tr>
-                  ))}
-
-                {selectedStats.orders.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="empty-detail">
-                      Este cliente no tiene pedidos.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
     </section>
   )
 }

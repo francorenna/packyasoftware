@@ -235,6 +235,17 @@ function OrdersForm({
       prevItems.map((item, itemIndex) => {
         if (itemIndex !== index) return item
 
+        if (field === 'productId') {
+          const selectedProduct = productById[value]
+          const nextUnitPrice = parsePositiveNumber(selectedProduct?.salePrice)
+
+          return {
+            ...item,
+            productId: value,
+            unitPrice: nextUnitPrice,
+          }
+        }
+
         if (field === 'quantity' || field === 'unitPrice') {
           return { ...item, [field]: parsePositiveNumber(value) }
         }

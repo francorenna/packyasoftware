@@ -143,6 +143,7 @@ const normalizeOrder = (order, index) => {
             quantity: toPositiveNumber(item.quantity),
             unitPrice: toPositiveNumber(item.unitPrice),
             isClientMaterial: Boolean(item.isClientMaterial ?? false),
+            itemCompleted: Boolean(item.itemCompleted ?? false),
           }
         })
         .filter(Boolean)
@@ -162,6 +163,25 @@ const normalizeOrder = (order, index) => {
             amount: toPositiveNumber(payment.amount),
             method,
             date: String(payment.date ?? new Date().toISOString()),
+            note: String(payment.note ?? '').trim(),
+          }
+        })
+        .filter(Boolean)
+    : []
+
+  const safeFinancialAdjustments = Array.isArray(order.financialAdjustments)
+    ? order.financialAdjustments
+        .map((adjustment, adjustmentIndex) => {
+          if (!adjustment || typeof adjustment !== 'object') return null
+
+          const amount = Number(adjustment.amount)
+          if (!Number.isFinite(amount) || amount === 0) return null
+
+          return {
+            id: String(adjustment.id ?? `ADJ-${index + 1}-${adjustmentIndex + 1}`),
+            amount,
+            note: String(adjustment.note ?? adjustment.reason ?? '').trim(),
+            date: String(adjustment.date ?? new Date().toISOString()),
           }
         })
         .filter(Boolean)
@@ -217,6 +237,7 @@ const normalizeOrder = (order, index) => {
     archivedAt: normalizedArchivedAt,
     items: safeItems,
     payments: safePayments,
+    financialAdjustments: safeFinancialAdjustments,
     total: toPositiveNumber(order.total),
   }
 }
@@ -270,6 +291,31 @@ function useOrdersState() {
   }, [orders])
 
   const createOrder = (newOrder) => {
+    const safeItems = Array.isArray(newOrder?.items)
+      ? newOrder.items
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null
+
+            const productId = String(item.productId ?? '').trim()
+            const productName = String(item.productName ?? item.product ?? '').trim()
+            const quantity = toPositiveNumber(item.quantity)
+            const unitPrice = toPositiveNumber(item.unitPrice)
+
+            if (quantity <= 0) return null
+            if (!productId && !productName) return null
+
+            return {
+              productId,
+              productName,
+              quantity,
+              unitPrice,
+              isClientMaterial: Boolean(item.isClientMaterial ?? false),
+              itemCompleted: Boolean(item.itemCompleted ?? false),
+            }
+          })
+          .filter(Boolean)
+      : []
+
     setOrders((prevOrders) => [
       applyAutoArchive({
         ...newOrder,
@@ -291,7 +337,9 @@ function useOrdersState() {
         urgent: Boolean(newOrder.urgent ?? false),
         isArchived: Boolean(newOrder.isArchived ?? false),
         archivedAt: newOrder.archivedAt ?? null,
+        items: safeItems,
         payments: [],
+        financialAdjustments: [],
         isSample: Boolean(newOrder.isSample ?? false),
       }),
       ...prevOrders,
@@ -311,6 +359,7 @@ function useOrdersState() {
       amount: paymentAmount,
       method: paymentMethod,
       date: new Date().toISOString(),
+      note: String(paymentData.note ?? '').trim(),
     }
 
     setOrders((prevOrders) =>
@@ -346,6 +395,66 @@ function useOrdersState() {
           ...order,
           status: safeStatus,
         })
+      }),
+    )
+  }
+
+  const registerOrderFinancialAdjustment = (orderId, adjustmentData) => {
+    const safeData = adjustmentData && typeof adjustmentData === 'object' ? adjustmentData : {}
+    const amount = Number(safeData.amount)
+    if (!Number.isFinite(amount) || amount === 0) return
+
+    const note = String(safeData.note ?? safeData.reason ?? '').trim()
+    if (!note) return
+
+    const newAdjustment = {
+      id: `ADJ-${Date.now()}`,
+      amount,
+      note,
+      date: new Date().toISOString(),
+    }
+
+    setOrders((prevOrders) =>
+      prevOrders.map((order) => {
+        if (order.id !== orderId) return order
+
+        return applyAutoArchive({
+          ...order,
+          financialAdjustments: [
+            ...(Array.isArray(order.financialAdjustments) ? order.financialAdjustments : []),
+            newAdjustment,
+          ],
+        })
+      }),
+    )
+  }
+
+  const appendOrderFinancialObservation = (orderId, observation) => {
+    const note = String(observation ?? '').trim()
+    if (!note) return
+
+    const timestamp = new Date().toLocaleString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+
+    setOrders((prevOrders) =>
+      prevOrders.map((order) => {
+        if (order.id !== orderId) return order
+
+        const previousNote = String(order.financialNote ?? '').trim()
+        const nextLine = `[${timestamp}] ${note}`
+        const combinedNote = previousNote
+          ? `${previousNote}\n${nextLine}`
+          : nextLine
+
+        return {
+          ...order,
+          financialNote: combinedNote,
+        }
       }),
     )
   }
@@ -450,6 +559,7 @@ function useOrdersState() {
               quantity,
               unitPrice,
               isClientMaterial: Boolean(item.isClientMaterial ?? false),
+              itemCompleted: Boolean(item.itemCompleted ?? false),
             }
           })
           .filter(Boolean)
@@ -474,6 +584,33 @@ function useOrdersState() {
           items: safeNextItems,
           total: nextTotal,
         })
+      }),
+    )
+  }
+
+  const updateOrderItemCompletion = (orderId, itemIndex, itemCompleted) => {
+    const safeIndex = Number(itemIndex)
+    if (!Number.isInteger(safeIndex) || safeIndex < 0) return
+
+    setOrders((prevOrders) =>
+      prevOrders.map((order) => {
+        if (order.id !== orderId) return order
+
+        const safeItems = Array.isArray(order.items) ? order.items : []
+        if (safeIndex >= safeItems.length) return order
+
+        const nextItems = safeItems.map((item, index) => {
+          if (index !== safeIndex) return item
+          return {
+            ...item,
+            itemCompleted: Boolean(itemCompleted),
+          }
+        })
+
+        return {
+          ...order,
+          items: nextItems,
+        }
       }),
     )
   }
@@ -546,9 +683,12 @@ function useOrdersState() {
     registerPayment,
     updateOrderStatus,
     updateOrderDelivery,
+    registerOrderFinancialAdjustment,
+    appendOrderFinancialObservation,
     reopenOrder,
     updateOrderClient,
     updateOrderItems,
+    updateOrderItemCompletion,
     updateOrderUrgency,
     convertSampleToRealOrder,
     deleteCancelledOrder,

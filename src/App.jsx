@@ -40,9 +40,12 @@ function App() {
     registerPayment,
     updateOrderStatus,
     updateOrderDelivery,
+    registerOrderFinancialAdjustment,
+    appendOrderFinancialObservation,
     reopenOrder,
     updateOrderClient,
     updateOrderItems,
+    updateOrderItemCompletion,
     updateOrderUrgency,
     convertSampleToRealOrder,
     deleteCancelledOrder,
@@ -467,6 +470,7 @@ function App() {
                 onUpdateOrderDelivery={updateOrderDelivery}
                 onUpdateOrderClient={updateOrderClient}
                 onUpdateOrderItems={updateOrderItems}
+                onUpdateOrderItemCompletion={updateOrderItemCompletion}
                 onUpdateOrderUrgency={updateOrderUrgency}
                 onDeleteCancelledOrder={deleteCancelledOrder}
                 onCreateClient={handleCreateClient}
@@ -506,6 +510,9 @@ function App() {
                 orders={orders}
                 onSaveClient={upsertClient}
                 onDeleteClient={deleteClient}
+                onRegisterPayment={registerPayment}
+                onRegisterOrderAdjustment={registerOrderFinancialAdjustment}
+                onAddOrderObservation={appendOrderFinancialObservation}
               />
             }
           />
@@ -558,6 +565,7 @@ function App() {
                 products={products}
                 orders={orders}
                 clients={clients}
+                expenses={expenses}
                 onSaveProduct={upsertProduct}
               />
             }

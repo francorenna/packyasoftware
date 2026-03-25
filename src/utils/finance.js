@@ -35,14 +35,23 @@ const getCurrentMonthKey = () => toDateKey(new Date()).slice(0, 7)
 const getOrderFinancialSummary = (order) => {
   const items = Array.isArray(order?.items) ? order.items : []
   const payments = Array.isArray(order?.payments) ? order.payments : []
+  const financialAdjustments = Array.isArray(order?.financialAdjustments)
+    ? order.financialAdjustments
+    : []
 
   const subtotal = items.reduce(
     (acc, item) => acc + toPositiveNumber(item?.quantity) * toPositiveNumber(item?.unitPrice),
     0,
   )
   const discount = toPositiveNumber(order?.discount)
-  const finalTotal = toPositiveNumber(order?.total)
-  const fallbackSubtotal = finalTotal + discount
+  const baseTotal = toPositiveNumber(order?.total)
+  const adjustmentTotal = financialAdjustments.reduce((acc, adjustment) => {
+    const amount = Number(adjustment?.amount)
+    if (!Number.isFinite(amount)) return acc
+    return acc + amount
+  }, 0)
+  const finalTotal = Math.max(baseTotal + adjustmentTotal, 0)
+  const fallbackSubtotal = baseTotal + discount
   const effectiveSubtotal = subtotal > 0 ? subtotal : fallbackSubtotal
 
   const totalPaid = payments.reduce(
@@ -58,9 +67,12 @@ const getOrderFinancialSummary = (order) => {
   return {
     items,
     payments,
+    financialAdjustments,
     subtotal,
     discount,
     effectiveSubtotal,
+    adjustmentTotal,
+    baseTotal,
     finalTotal,
     totalPaid,
     remainingDebt,
@@ -137,7 +149,7 @@ const getMonthlyFinanceMovements = ({ orders, purchases, expenses, monthKey }) =
       const amount = toPositiveNumber(expense?.amount)
       if (amount <= 0) return null
 
-      const description = String(expense?.description ?? '').trim() || 'Egreso manual'
+      const description = String(expense?.reason ?? expense?.description ?? '').trim() || 'Egreso manual'
       const category = String(expense?.category ?? '').trim()
 
       return {

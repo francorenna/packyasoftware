@@ -331,6 +331,24 @@ textarea {
   align-items: start;
 }
 
+.ranking-grid {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.ranking-panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.65rem;
+  padding: 0.65rem;
+  background: #f8fafc;
+}
+
+.ranking-panel h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.9rem;
+  color: #1e293b;
+}
+
 .reports-controls {
   display: flex;
   flex-wrap: wrap;
@@ -826,7 +844,11 @@ textarea {
 
 .facturado .client-summary-value { color: #2c3e50; }
 .pagado .client-summary-value { color: #2e7d32; }
-.deuda .client-summary-value { color: #c62828; }
+.deuda .client-summary-value {
+  color: #c62828;
+  font-weight: 700;
+  font-size: 16px;
+}
 
 .client-orders-table {
   margin-top: 0.3rem;
@@ -844,8 +866,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 2px 10px;
-  font-size: 0.74rem;
+  padding: 4px 8px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -866,6 +888,7 @@ textarea {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.7rem;
+  margin-top: 12px;
 }
 
 .client-actions-grid h4 {
@@ -1579,6 +1602,11 @@ textarea {
 .status-entregado-deuda {
   background: #86efac;
   color: #14532d;
+}
+
+.status-completed {
+  background: #dcfce7;
+  color: #166534;
 }
 
 .status-cancelado {

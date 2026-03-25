@@ -23,6 +23,13 @@ const toPositiveNumber = (value) => {
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
 }
 
+const formatCurrency = (value) =>
+  new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(Number(value) || 0)
+
 const getCategoryLabel = (value) => {
   const normalized = String(value ?? '').trim().toUpperCase()
   const option = CATEGORY_OPTIONS.find((item) => item.key === normalized)
@@ -436,6 +443,70 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
     }
   }, [safeOrders, safeProducts])
 
+  const clientRankingRows = useMemo(() => {
+    const fallbackNameById = safeClients.reduce((acc, client) => {
+      const key = String(client?.id ?? '').trim()
+      if (!key) return acc
+      acc[key] = String(client?.name ?? 'Sin cliente').trim() || 'Sin cliente'
+      return acc
+    }, {})
+
+    const rankingByClient = {}
+
+    safeOrders.forEach((order) => {
+      if (order?.isSample) return
+      if (String(order?.status ?? '') === 'Cancelado') return
+
+      const clientKey = getClientKey(order)
+      if (!clientKey) return
+
+      const summary = getOrderFinancialSummary(order)
+      const totalFacturado = toPositiveNumber(summary?.finalTotal)
+      const totalPagado = toPositiveNumber(summary?.totalPaid)
+      const totalDeuda = Math.max(totalFacturado - totalPagado, 0)
+      const fallbackName = String(order?.clientName ?? order?.client ?? 'Sin cliente').trim() || 'Sin cliente'
+      const clientId = String(order?.clientId ?? '').trim()
+
+      const row = rankingByClient[clientKey] ?? {
+        clientKey,
+        clientName: fallbackNameById[clientId] ?? fallbackName,
+        totalFacturado: 0,
+        totalPagado: 0,
+        totalDeuda: 0,
+        cantidadPedidos: 0,
+      }
+
+      row.totalFacturado += totalFacturado
+      row.totalPagado += totalPagado
+      row.totalDeuda += totalDeuda
+      row.cantidadPedidos += 1
+      rankingByClient[clientKey] = row
+    })
+
+    return Object.values(rankingByClient).map((row) => ({
+      ...row,
+      porcentajePago: row.totalFacturado > 0 ? row.totalPagado / row.totalFacturado : 0,
+    }))
+  }, [safeClients, safeOrders])
+
+  const topBilledClients = useMemo(
+    () => [...clientRankingRows].sort((a, b) => b.totalFacturado - a.totalFacturado).slice(0, 10),
+    [clientRankingRows],
+  )
+
+  const topDebtClients = useMemo(
+    () => [...clientRankingRows].sort((a, b) => b.totalDeuda - a.totalDeuda).slice(0, 10),
+    [clientRankingRows],
+  )
+
+  const topComplianceClients = useMemo(
+    () => [...clientRankingRows]
+      .filter((row) => row.totalFacturado > 0)
+      .sort((a, b) => b.porcentajePago - a.porcentajePago)
+      .slice(0, 10),
+    [clientRankingRows],
+  )
+
   const costRows = useMemo(
     () =>
       productsSorted.map((product) => {
@@ -806,6 +877,97 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
             >
               Reporte de deudas
             </button>
+          </div>
+        </section>
+
+        <section className="card-block">
+          <div className="card-head">
+            <h3>Ranking de clientes</h3>
+          </div>
+
+          <div className="ranking-grid">
+            <div className="ranking-panel">
+              <h4>Mejores clientes</h4>
+              <div className="table-wrap">
+                <table className="orders-table">
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Facturado</th>
+                      <th>Pedidos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topBilledClients.map((row) => (
+                      <tr key={`billed-${row.clientKey}`}>
+                        <td>{row.clientName}</td>
+                        <td>{formatCurrency(row.totalFacturado)}</td>
+                        <td>{row.cantidadPedidos}</td>
+                      </tr>
+                    ))}
+                    {topBilledClients.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="empty-detail">Sin datos.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="ranking-panel">
+              <h4>Clientes con mayor deuda</h4>
+              <div className="table-wrap">
+                <table className="orders-table">
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Deuda total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topDebtClients.map((row) => (
+                      <tr key={`debt-${row.clientKey}`}>
+                        <td>{row.clientName}</td>
+                        <td>{formatCurrency(row.totalDeuda)}</td>
+                      </tr>
+                    ))}
+                    {topDebtClients.length === 0 && (
+                      <tr>
+                        <td colSpan={2} className="empty-detail">Sin datos.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="ranking-panel">
+              <h4>Clientes más cumplidores</h4>
+              <div className="table-wrap">
+                <table className="orders-table">
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>% pago</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topComplianceClients.map((row) => (
+                      <tr key={`pay-${row.clientKey}`}>
+                        <td>{row.clientName}</td>
+                        <td>{Math.round(row.porcentajePago * 100)}%</td>
+                      </tr>
+                    ))}
+                    {topComplianceClients.length === 0 && (
+                      <tr>
+                        <td colSpan={2} className="empty-detail">Sin datos.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </section>
 

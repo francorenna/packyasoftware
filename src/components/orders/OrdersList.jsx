@@ -92,6 +92,7 @@ function OrdersList({
   const [deliveryDrafts, setDeliveryDrafts] = useState({})
   const [itemsDrafts, setItemsDrafts] = useState({})
   const [deliverySaveUiByOrder, setDeliverySaveUiByOrder] = useState({})
+  const [autoReadyPromptedByOrder, setAutoReadyPromptedByOrder] = useState({})
   const [deliveryConfirmModal, setDeliveryConfirmModal] = useState({
     isOpen: false,
     orderId: '',
@@ -134,6 +135,49 @@ function OrdersList({
       setExpandedOrderId(null)
     }
   }, [safeOrders, expandedOrderId])
+
+  useEffect(() => {
+    if (typeof onUpdateOrderStatus !== 'function') return
+
+    let hasMapChanges = false
+    const nextPromptMap = { ...autoReadyPromptedByOrder }
+
+    safeOrders.forEach((order) => {
+      const orderId = String(order?.id ?? '')
+      if (!orderId) return
+
+      const status = String(order?.status ?? '')
+      const items = Array.isArray(order?.items) ? order.items : []
+      const hasItems = items.length > 0
+      const allCompleted = hasItems && items.every((item) => Boolean(item?.itemCompleted))
+      const shouldAutoPrompt = status === 'En Proceso' && allCompleted
+
+      if (!shouldAutoPrompt) {
+        if (nextPromptMap[orderId]) {
+          nextPromptMap[orderId] = false
+          hasMapChanges = true
+        }
+        return
+      }
+
+      if (nextPromptMap[orderId]) return
+
+      const shouldMarkReady = window.confirm(
+        'Todos los ítems están completados.\n¿Deseas marcar el pedido como LISTO?',
+      )
+
+      nextPromptMap[orderId] = true
+      hasMapChanges = true
+
+      if (shouldMarkReady) {
+        onUpdateOrderStatus(orderId, 'Listo')
+      }
+    })
+
+    if (hasMapChanges) {
+      setAutoReadyPromptedByOrder(nextPromptMap)
+    }
+  }, [autoReadyPromptedByOrder, onUpdateOrderStatus, safeOrders])
 
   const clientsById = useMemo(
     () =>
@@ -355,6 +399,8 @@ function OrdersList({
                 ? 'status-entregado-deuda'
                 : statusClass
               const statusOptions = order.isSample ? sampleOrderStatuses : orderStatuses
+              const hasItems = items.length > 0
+              const allItemsCompleted = hasItems && items.every((item) => Boolean(item?.itemCompleted))
               const selectedClientId = String(order?.clientId ?? '')
               const clientDebtKey = getClientDebtKey(order)
               const hasClientDebt = clientDebtKey ? clientsWithDebt.has(clientDebtKey) : false
@@ -738,6 +784,9 @@ function OrdersList({
                     <td>
                       <div className="order-status-cell">
                         {order.isSample && <span className="status-badge status-muestra">MUESTRA</span>}
+                        {allItemsCompleted && !order.isSample && (
+                          <span className="status-badge status-completed">✔ Completado</span>
+                        )}
                         <span className={`status-badge ${statusBadgeClass}`}>
                           {statusLabel}
                         </span>

@@ -127,6 +127,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
   const [hasShownMissingCostsWarning, setHasShownMissingCostsWarning] = useState(false)
   const [accountScope, setAccountScope] = useState('all')
   const [selectedAccountClientKey, setSelectedAccountClientKey] = useState('')
+  const [rankingPeriod, setRankingPeriod] = useState('all')
 
   const productsSorted = useMemo(
     () =>
@@ -443,6 +444,23 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
     }
   }, [safeOrders, safeProducts])
 
+  const rankingOrders = useMemo(() => {
+    const now = new Date()
+    const daysWindow = rankingPeriod === '30d' ? 30 : rankingPeriod === '90d' ? 90 : null
+
+    if (!daysWindow) return safeOrders
+
+    const maxDiffMs = daysWindow * 24 * 60 * 60 * 1000
+
+    return safeOrders.filter((order) => {
+      const dateRef = order?.createdAt ?? order?.deliveryDate
+      const date = new Date(dateRef)
+      if (Number.isNaN(date.getTime())) return false
+
+      return now.getTime() - date.getTime() <= maxDiffMs
+    })
+  }, [rankingPeriod, safeOrders])
+
   const clientRankingRows = useMemo(() => {
     const fallbackNameById = safeClients.reduce((acc, client) => {
       const key = String(client?.id ?? '').trim()
@@ -453,7 +471,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
 
     const rankingByClient = {}
 
-    safeOrders.forEach((order) => {
+    rankingOrders.forEach((order) => {
       if (order?.isSample) return
       if (String(order?.status ?? '') === 'Cancelado') return
 
@@ -487,7 +505,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
       ...row,
       porcentajePago: row.totalFacturado > 0 ? row.totalPagado / row.totalFacturado : 0,
     }))
-  }, [safeClients, safeOrders])
+  }, [rankingOrders, safeClients])
 
   const topBilledClients = useMemo(
     () => [...clientRankingRows].sort((a, b) => b.totalFacturado - a.totalFacturado).slice(0, 10),
@@ -883,6 +901,21 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
         <section className="card-block">
           <div className="card-head">
             <h3>Ranking de clientes</h3>
+          </div>
+
+          <div className="reports-controls">
+            <label>
+              Período{' '}
+              <select
+                className="inline-select"
+                value={rankingPeriod}
+                onChange={(event) => setRankingPeriod(event.target.value)}
+              >
+                <option value="all">Histórico</option>
+                <option value="30d">Últimos 30 días</option>
+                <option value="90d">Últimos 90 días</option>
+              </select>
+            </label>
           </div>
 
           <div className="ranking-grid">

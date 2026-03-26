@@ -1,4 +1,6 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+
+const PRODUCT_FILTER_OPTIONS = ['TODOS', 'CAJA', 'BOLSA', 'EMBALAJE', 'OTRO']
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -32,6 +34,37 @@ const createSupplierForm = () => ({
   phone: '',
   notes: '',
 })
+
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const getSearchScore = (productName, query) => {
+  const normalizedName = normalizeSearchText(productName)
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) return 0
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  if (queryTokens.length === 0) return 0
+
+  const hasAllTokens = queryTokens.every((token) => normalizedName.includes(token))
+  if (!hasAllTokens) return -1
+
+  let score = 0
+  if (normalizedName === normalizedQuery) score += 1000
+  if (normalizedName.startsWith(normalizedQuery)) score += 500
+  if (normalizedName.includes(normalizedQuery)) score += 250
+
+  queryTokens.forEach((token) => {
+    if (normalizedName.includes(token)) score += 60
+    if (/^\d+$/.test(token) && normalizedName.includes(token)) score += 180
+  })
+
+  return score
+}
 
 const purchaseFormContainerStyle = {
   display: 'flex',
@@ -73,6 +106,11 @@ function PurchasesPage({
   const [supplierForm, setSupplierForm] = useState(createSupplierForm())
   const [editingSupplierId, setEditingSupplierId] = useState(null)
   const [expandedPurchaseId, setExpandedPurchaseId] = useState(null)
+  const [selectedCategory, setSelectedCategory] = useState('TODOS')
+  const [productSearch, setProductSearch] = useState('')
+  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
+  const [activeItemIndex, setActiveItemIndex] = useState(0)
+  const productSearchInputRef = useRef(null)
 
   const safeProducts = Array.isArray(products) ? products : []
   const safePurchases = Array.isArray(purchases) ? purchases : []
@@ -90,6 +128,66 @@ function PurchasesPage({
         String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' }),
       ),
     [products],
+  )
+
+  const normalizedSelectedCategory = useMemo(() => {
+    const value = String(selectedCategory ?? '').trim().toUpperCase()
+    if (!value || !PRODUCT_FILTER_OPTIONS.includes(value)) return 'TODOS'
+    return value
+  }, [selectedCategory])
+
+  const filteredProducts = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+
+    const byCategory = sortedProducts.filter((product) => {
+      const category = String(product?.category ?? '').trim().toUpperCase()
+      return normalizedSelectedCategory === 'TODOS' || category === normalizedSelectedCategory
+    })
+
+    if (!query) return byCategory
+
+    return byCategory
+      .map((product) => ({
+        product,
+        score: getSearchScore(String(product?.name ?? ''), query),
+      }))
+      .filter((row) => row.score >= 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+
+        const usageDiff = (Number(b.product?.usageCount) || 0) - (Number(a.product?.usageCount) || 0)
+        if (usageDiff !== 0) return usageDiff
+
+        return String(a.product?.name ?? '').localeCompare(String(b.product?.name ?? ''), 'es', { sensitivity: 'base' })
+      })
+      .map((row) => row.product)
+  }, [normalizedSelectedCategory, productSearch, sortedProducts])
+
+  const suggestedProduct = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+    if (!query) return null
+    return filteredProducts[0] ?? null
+  }, [filteredProducts, productSearch])
+
+  const autocompleteProducts = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+    if (!query) return []
+    return filteredProducts.slice(0, 8)
+  }, [filteredProducts, productSearch])
+
+  const topUsedProducts = useMemo(
+    () =>
+      [...safeProducts]
+        .sort((a, b) => {
+          const usageDiff = (Number(b?.usageCount) || 0) - (Number(a?.usageCount) || 0)
+          if (usageDiff !== 0) return usageDiff
+
+          const aLast = new Date(a?.lastUsedAt ?? 0).getTime()
+          const bLast = new Date(b?.lastUsedAt ?? 0).getTime()
+          return (Number.isNaN(bLast) ? 0 : bLast) - (Number.isNaN(aLast) ? 0 : aLast)
+        })
+        .slice(0, 5),
+    [safeProducts],
   )
 
   const productById = useMemo(
@@ -140,17 +238,70 @@ function PurchasesPage({
     [items, productById],
   )
 
+  useEffect(() => {
+    if (!productSearchInputRef.current) return
+    productSearchInputRef.current.focus()
+  }, [normalizedSelectedCategory])
+
   const handleItemChange = (index, field, value) => {
     setItems((prevItems) =>
       prevItems.map((item, itemIndex) =>
         itemIndex === index
-          ? {
-              ...item,
-                [field]: field === 'productId' ? value : value,
-            }
+          ? (() => {
+              if (field === 'productId') {
+                const nextProductId = String(value ?? '')
+                const selectedProduct = productById[nextProductId]
+                const nextUnitCost = Math.max(
+                  Number(selectedProduct?.referenceCost ?? selectedProduct?.unitCost ?? item.unitCost) || 0,
+                  0,
+                )
+
+                return {
+                  ...item,
+                  productId: nextProductId,
+                  unitCost: nextUnitCost,
+                }
+              }
+
+              return {
+                ...item,
+                [field]: value,
+              }
+            })()
           : item,
       ),
     )
+    setActiveItemIndex(index)
+  }
+
+  const quickSelectProduct = (productId) => {
+    const safeProductId = String(productId ?? '').trim()
+    if (!safeProductId) return
+
+    setItems((prevItems) => {
+      const safeItems = Array.isArray(prevItems) ? prevItems : [createPurchaseItem()]
+      const indexToUse =
+        activeItemIndex >= 0 && activeItemIndex < safeItems.length
+          ? activeItemIndex
+          : safeItems.findIndex((item) => !String(item?.productId ?? '').trim())
+
+      const safeIndex = indexToUse >= 0 ? indexToUse : 0
+      const selectedProduct = productById[safeProductId]
+      const nextUnitCost = Math.max(Number(selectedProduct?.referenceCost ?? selectedProduct?.unitCost ?? 0) || 0, 0)
+
+      return safeItems.map((item, idx) =>
+        idx === safeIndex
+          ? {
+              ...item,
+              productId: safeProductId,
+              unitCost: nextUnitCost,
+            }
+          : item,
+      )
+    })
+
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
   }
 
   const addItem = () => {
@@ -265,6 +416,100 @@ function PurchasesPage({
               </button>
             </div>
 
+            <div className="orders-product-filters">
+              <label>
+                Categoría
+                <select
+                  value={normalizedSelectedCategory}
+                  onChange={(event) => {
+                    setSelectedCategory(event.target.value || 'TODOS')
+                    setHighlightedSuggestionIndex(0)
+                  }}
+                >
+                  {PRODUCT_FILTER_OPTIONS.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Buscar producto
+                <input
+                  ref={productSearchInputRef}
+                  type="text"
+                  value={productSearch}
+                  onChange={(event) => {
+                    setProductSearch(event.target.value)
+                    setHighlightedSuggestionIndex(0)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ArrowDown') {
+                      if (autocompleteProducts.length === 0) return
+                      event.preventDefault()
+                      setHighlightedSuggestionIndex((prev) => Math.min(prev + 1, autocompleteProducts.length - 1))
+                      return
+                    }
+
+                    if (event.key === 'ArrowUp') {
+                      if (autocompleteProducts.length === 0) return
+                      event.preventDefault()
+                      setHighlightedSuggestionIndex((prev) => Math.max(prev - 1, 0))
+                      return
+                    }
+
+                    if (event.key !== 'Enter') return
+
+                    const activeSuggestion = autocompleteProducts[highlightedSuggestionIndex] ?? suggestedProduct
+                    if (!activeSuggestion?.id) return
+
+                    event.preventDefault()
+                    quickSelectProduct(activeSuggestion.id)
+                  }}
+                  placeholder="Buscar producto..."
+                />
+                {suggestedProduct && (
+                  <p className="payment-helper">
+                    Sugerido: <strong>{suggestedProduct.name}</strong> (Enter para autocompletar)
+                  </p>
+                )}
+                {autocompleteProducts.length > 0 && (
+                  <div className="orders-autocomplete-list" role="listbox" aria-label="Sugerencias de productos para compras">
+                    {autocompleteProducts.map((product, index) => (
+                      <button
+                        key={`purchase-suggestion-${product.id}`}
+                        type="button"
+                        className={`orders-autocomplete-item ${index === highlightedSuggestionIndex ? 'orders-autocomplete-item-active' : ''}`}
+                        onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                        onClick={() => quickSelectProduct(product.id)}
+                      >
+                        {product.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </label>
+
+              <div className="orders-most-used-wrap">
+                <p className="orders-most-used-title">⭐ Más usados</p>
+                <div className="orders-most-used-list">
+                  {topUsedProducts.length > 0 ? (
+                    topUsedProducts.map((product) => (
+                      <button
+                        key={product.id}
+                        type="button"
+                        className="quick-fill-btn"
+                        onClick={() => quickSelectProduct(product.id)}
+                      >
+                        {product.name} ({Number(product?.usageCount) || 0})
+                      </button>
+                    ))
+                  ) : (
+                    <span className="muted-label">Sin historial aún.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="items-stack" style={purchaseItemsStackStyle}>
               {items.map((item, index) => (
                 <div key={`purchase-item-${index}`} className="purchase-item-row">
@@ -273,10 +518,13 @@ function PurchasesPage({
                     onChange={(event) =>
                       handleItemChange(index, 'productId', event.target.value)
                     }
+                    onFocus={() => setActiveItemIndex(index)}
                     required
                   >
                     <option value="">Seleccionar producto</option>
-                    {sortedProducts.map((product) => (
+                    {(item.productId && productById[item.productId]
+                      ? [productById[item.productId], ...filteredProducts.filter((product) => product.id !== item.productId)]
+                      : filteredProducts).map((product) => (
                       <option key={product.id} value={product.id}>
                         {product.name}
                       </option>
@@ -290,6 +538,7 @@ function PurchasesPage({
                     onChange={(event) =>
                       handleItemChange(index, 'quantity', event.target.value)
                     }
+                    onFocus={() => setActiveItemIndex(index)}
                     placeholder="Cantidad"
                   />
 
@@ -300,6 +549,7 @@ function PurchasesPage({
                     onChange={(event) =>
                       handleItemChange(index, 'unitCost', event.target.value)
                     }
+                    onFocus={() => setActiveItemIndex(index)}
                     placeholder="Costo unitario"
                   />
 

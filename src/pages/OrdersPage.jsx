@@ -74,6 +74,7 @@ function OrdersPage({
   onUpdateOrderUrgency,
   onDeleteCancelledOrder,
   onCreateClient,
+  onMarkProductAsUsed,
 }) {
   const [deliveryFilter, setDeliveryFilter] = useState('all')
 
@@ -211,6 +212,7 @@ function OrdersPage({
           stockByProductId={stockByProductId}
           onCreate={onCreateOrder}
           onCreateClient={onCreateClient}
+          onProductUsed={onMarkProductAsUsed}
         />
         <div className="orders-list-column">
           <section className="production-summary" aria-label="Resumen de Producción">

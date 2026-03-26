@@ -54,6 +54,19 @@ const toPositiveNumber = (value) => {
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
 }
 
+const toUsageCount = (value) => {
+  const parsed = Number(value)
+  if (Number.isNaN(parsed) || parsed < 0) return 0
+  return Math.floor(parsed)
+}
+
+const toTimestampString = (value) => {
+  if (value === null || value === undefined) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toISOString()
+}
+
 const normalizeImage = (value) => {
   if (typeof value !== 'string') return ''
   const normalized = value.trim()
@@ -140,6 +153,8 @@ const normalizeProduct = (product, index) => {
     referenceCost: toPositiveNumber(product.referenceCost ?? product.lastUnitCost),
     salePrice: toPositiveNumber(product.salePrice ?? product.unitPrice),
     image: normalizeImage(product.image),
+    usageCount: toUsageCount(product.usageCount),
+    lastUsedAt: toTimestampString(product.lastUsedAt),
     stockMovements,
   }
 }
@@ -285,6 +300,8 @@ function useProductsState() {
         referenceCost: normalizedProductBase.referenceCost,
         salePrice: normalizedProductBase.salePrice,
         image: normalizedProductBase.image || normalizeImage(existingProduct?.image),
+        usageCount: toUsageCount(existingProduct?.usageCount),
+        lastUsedAt: toTimestampString(existingProduct?.lastUsedAt),
         stockMovements: existingProduct?.stockMovements ?? [],
       }
 
@@ -420,6 +437,23 @@ function useProductsState() {
     )
   }
 
+  const markProductAsUsed = (productId) => {
+    const safeProductId = String(productId ?? '').trim()
+    if (!safeProductId) return
+
+    setProducts((prevProducts) =>
+      prevProducts.map((product) => {
+        if (String(product?.id ?? '').trim() !== safeProductId) return product
+
+        return {
+          ...product,
+          usageCount: toUsageCount(product?.usageCount) + 1,
+          lastUsedAt: new Date().toISOString(),
+        }
+      }),
+    )
+  }
+
   return {
     products,
     upsertProduct,
@@ -428,6 +462,7 @@ function useProductsState() {
     registerOrderReturn,
     updateStock,
     updateProductReferenceCost,
+    markProductAsUsed,
   }
 }
 

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleOrderStatuses = ['Pendiente', 'Lista']
 const ORDER_DRAFT_STORAGE_KEY = 'packya_draft_order'
+const PRODUCT_FILTER_OPTIONS = ['TODOS', 'CAJA', 'BOLSA', 'EMBALAJE', 'OTRO']
 
 const createEmptyItem = () => ({
   productId: '',
@@ -74,6 +75,38 @@ const parsePositiveNumber = (value) => {
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
 }
 
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const getSearchScore = (productName, query) => {
+  const normalizedName = normalizeSearchText(productName)
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) return 0
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  if (queryTokens.length === 0) return 0
+
+  const hasAllTokens = queryTokens.every((token) => normalizedName.includes(token))
+  if (!hasAllTokens) return -1
+
+  let score = 0
+
+  if (normalizedName === normalizedQuery) score += 1000
+  if (normalizedName.startsWith(normalizedQuery)) score += 500
+  if (normalizedName.includes(normalizedQuery)) score += 250
+
+  queryTokens.forEach((token) => {
+    if (normalizedName.includes(token)) score += 60
+    if (/^\d+$/.test(token) && normalizedName.includes(token)) score += 180
+  })
+
+  return score
+}
+
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
     style: 'currency',
@@ -88,6 +121,7 @@ function OrdersForm({
   stockByProductId,
   onCreate,
   onCreateClient,
+  onProductUsed,
 }) {
   const safeProducts = Array.isArray(products) ? products : []
   const safeClients = Array.isArray(clients) ? clients : []
@@ -108,6 +142,8 @@ function OrdersForm({
   const safeStockByProductId = stockByProductId ?? {}
   const initialDraft = useMemo(() => readOrderDraftFromSessionStorage(), [])
   const shouldSkipDraftPersistRef = useRef(false)
+  const productSearchInputRef = useRef(null)
+  const itemProductRefs = useRef({})
   const productById = useMemo(
     () =>
       safeProducts.reduce((acc, product) => {
@@ -162,6 +198,71 @@ function OrdersForm({
       : {}),
   }))
   const [quickClientError, setQuickClientError] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('TODOS')
+  const [productSearch, setProductSearch] = useState('')
+  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
+  const [activeItemIndex, setActiveItemIndex] = useState(0)
+  const [confirmedItems, setConfirmedItems] = useState({})
+
+  const normalizedSelectedCategory = useMemo(() => {
+    const value = String(selectedCategory ?? '').trim().toUpperCase()
+    if (!value || !PRODUCT_FILTER_OPTIONS.includes(value)) return 'TODOS'
+    return value
+  }, [selectedCategory])
+
+  const filteredProducts = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+
+    const byCategory = sortedProducts.filter((product) => {
+      const category = String(product?.category ?? '').trim().toUpperCase()
+      return normalizedSelectedCategory === 'TODOS' || category === normalizedSelectedCategory
+    })
+
+    if (!query) return byCategory
+
+    return byCategory
+      .map((product) => ({
+        product,
+        score: getSearchScore(String(product?.name ?? ''), query),
+      }))
+      .filter((row) => row.score >= 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+
+        const usageDiff = (Number(b.product?.usageCount) || 0) - (Number(a.product?.usageCount) || 0)
+        if (usageDiff !== 0) return usageDiff
+
+        return String(a.product?.name ?? '').localeCompare(String(b.product?.name ?? ''), 'es', { sensitivity: 'base' })
+      })
+      .map((row) => row.product)
+  }, [normalizedSelectedCategory, productSearch, sortedProducts])
+
+  const suggestedProduct = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+    if (!query) return null
+    return filteredProducts[0] ?? null
+  }, [filteredProducts, productSearch])
+
+  const autocompleteProducts = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+    if (!query) return []
+    return filteredProducts.slice(0, 8)
+  }, [filteredProducts, productSearch])
+
+  const topUsedProducts = useMemo(
+    () =>
+      [...safeProducts]
+        .sort((a, b) => {
+          const usageDiff = (Number(b?.usageCount) || 0) - (Number(a?.usageCount) || 0)
+          if (usageDiff !== 0) return usageDiff
+
+          const aLast = new Date(a?.lastUsedAt ?? 0).getTime()
+          const bLast = new Date(b?.lastUsedAt ?? 0).getTime()
+          return (Number.isNaN(bLast) ? 0 : bLast) - (Number.isNaN(aLast) ? 0 : aLast)
+        })
+        .slice(0, 5),
+    [safeProducts],
+  )
 
   useEffect(() => {
     if (shouldSkipDraftPersistRef.current) {
@@ -205,6 +306,17 @@ function OrdersForm({
     quickClientForm,
   ])
 
+  useEffect(() => {
+    if (!productSearchInputRef.current) return
+    productSearchInputRef.current.focus()
+  }, [normalizedSelectedCategory])
+
+  useEffect(() => {
+    const element = itemProductRefs.current[activeItemIndex]
+    if (!element) return
+    element.focus()
+  }, [activeItemIndex, items.length])
+
   const availableStatuses = isSample ? sampleOrderStatuses : orderStatuses
 
   const subtotal = useMemo(
@@ -231,6 +343,14 @@ function OrdersForm({
   )
 
   const handleItemChange = (index, field, value) => {
+    setConfirmedItems((prev) => {
+      if (!prev[index]) return prev
+      return {
+        ...prev,
+        [index]: false,
+      }
+    })
+
     setItems((prevItems) =>
       prevItems.map((item, itemIndex) => {
         if (itemIndex !== index) return item
@@ -238,6 +358,10 @@ function OrdersForm({
         if (field === 'productId') {
           const selectedProduct = productById[value]
           const nextUnitPrice = parsePositiveNumber(selectedProduct?.salePrice)
+
+          if (value && value !== item.productId) {
+            onProductUsed?.(value)
+          }
 
           return {
             ...item,
@@ -256,14 +380,126 @@ function OrdersForm({
   }
 
   const addItem = () => {
-    setItems((prevItems) => [...prevItems, createEmptyItem()])
+    setItems((prevItems) => {
+      const nextItems = [...prevItems, createEmptyItem()]
+      setActiveItemIndex(nextItems.length - 1)
+      return nextItems
+    })
   }
 
   const removeItem = (index) => {
     setItems((prevItems) => {
       if (prevItems.length === 1) return prevItems
-      return prevItems.filter((_, itemIndex) => itemIndex !== index)
+
+      const nextItems = prevItems.filter((_, itemIndex) => itemIndex !== index)
+
+      setConfirmedItems((prev) => {
+        const next = {}
+        Object.keys(prev).forEach((key) => {
+          const numericKey = Number(key)
+          if (!Number.isInteger(numericKey)) return
+          if (numericKey === index) return
+          if (numericKey > index) {
+            next[numericKey - 1] = prev[key]
+            return
+          }
+          next[numericKey] = prev[key]
+        })
+        return next
+      })
+
+      setActiveItemIndex((current) => {
+        if (current > index) return current - 1
+        if (current === index) return Math.max(index - 1, 0)
+        return current
+      })
+
+      return nextItems
     })
+  }
+
+  const isItemConfirmed = (index) => Boolean(confirmedItems[index])
+
+  const confirmItem = (index) => {
+    const targetItem = items[index]
+    if (!targetItem?.productId) return
+
+    setConfirmedItems((prev) => ({
+      ...prev,
+      [index]: true,
+    }))
+
+    const nextIndex = index + 1
+    if (nextIndex < items.length) {
+      setActiveItemIndex(nextIndex)
+      return
+    }
+
+    setItems((prevItems) => {
+      const nextItems = [...prevItems, createEmptyItem()]
+      setActiveItemIndex(nextItems.length - 1)
+      return nextItems
+    })
+  }
+
+  const unlockItem = (index) => {
+    setConfirmedItems((prev) => ({
+      ...prev,
+      [index]: false,
+    }))
+    setActiveItemIndex(index)
+  }
+
+  const quickSelectProduct = (productId) => {
+    const safeProductId = String(productId ?? '').trim()
+    if (!safeProductId) return
+
+    let selectedIndex = -1
+
+    setItems((prevItems) => {
+      const safeItems = Array.isArray(prevItems) ? prevItems : [createEmptyItem()]
+      const activeIndexIsValid =
+        activeItemIndex >= 0 &&
+        activeItemIndex < safeItems.length &&
+        confirmedItems[activeItemIndex] !== true
+
+      const firstEmptyUnconfirmed = safeItems.findIndex(
+        (item, index) => !confirmedItems[index] && !String(item?.productId ?? '').trim(),
+      )
+      const firstEditable = safeItems.findIndex((_, index) => !confirmedItems[index])
+
+      const indexToUse = activeIndexIsValid
+        ? activeItemIndex
+        : firstEmptyUnconfirmed >= 0
+          ? firstEmptyUnconfirmed
+          : firstEditable >= 0
+            ? firstEditable
+            : Math.max(safeItems.length - 1, 0)
+      selectedIndex = indexToUse
+
+      const selectedProduct = productById[safeProductId]
+      const nextUnitPrice = parsePositiveNumber(selectedProduct?.salePrice)
+
+      const nextItems = safeItems.map((item, index) =>
+        index === indexToUse
+          ? {
+              ...item,
+              productId: safeProductId,
+              unitPrice: nextUnitPrice,
+            }
+          : item,
+      )
+
+      return nextItems
+    })
+
+    if (selectedIndex >= 0) {
+      setActiveItemIndex(selectedIndex)
+    }
+
+    onProductUsed?.(safeProductId)
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
   }
 
   const handleQuickClientInput = (field, value) => {
@@ -525,18 +761,126 @@ function OrdersForm({
           </button>
         </div>
 
+        <div className="orders-product-filters">
+          <label>
+            Categoría
+            <select
+              value={normalizedSelectedCategory}
+              onChange={(event) => {
+                setSelectedCategory(event.target.value || 'TODOS')
+                setHighlightedSuggestionIndex(0)
+              }}
+            >
+              {PRODUCT_FILTER_OPTIONS.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Buscar producto
+            <input
+              ref={productSearchInputRef}
+              type="text"
+              value={productSearch}
+              onChange={(event) => {
+                setProductSearch(event.target.value)
+                setHighlightedSuggestionIndex(0)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown') {
+                  if (autocompleteProducts.length === 0) return
+                  event.preventDefault()
+                  setHighlightedSuggestionIndex((prev) => Math.min(prev + 1, autocompleteProducts.length - 1))
+                  return
+                }
+
+                if (event.key === 'ArrowUp') {
+                  if (autocompleteProducts.length === 0) return
+                  event.preventDefault()
+                  setHighlightedSuggestionIndex((prev) => Math.max(prev - 1, 0))
+                  return
+                }
+
+                if (event.key !== 'Enter') return
+
+                const activeSuggestion = autocompleteProducts[highlightedSuggestionIndex] ?? suggestedProduct
+                if (!activeSuggestion?.id) return
+
+                event.preventDefault()
+                quickSelectProduct(activeSuggestion.id)
+              }}
+              placeholder="Buscar producto..."
+            />
+            {suggestedProduct && (
+              <p className="payment-helper">
+                Sugerido: <strong>{suggestedProduct.name}</strong> (Enter para autocompletar)
+              </p>
+            )}
+            {autocompleteProducts.length > 0 && (
+              <div className="orders-autocomplete-list" role="listbox" aria-label="Sugerencias de productos">
+                {autocompleteProducts.map((product, index) => (
+                  <button
+                    key={`suggestion-${product.id}`}
+                    type="button"
+                    className={`orders-autocomplete-item ${index === highlightedSuggestionIndex ? 'orders-autocomplete-item-active' : ''}`}
+                    onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                    onClick={() => quickSelectProduct(product.id)}
+                  >
+                    {product.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </label>
+
+          <div className="orders-most-used-wrap">
+            <p className="orders-most-used-title">⭐ Más usados</p>
+            <div className="orders-most-used-list">
+              {topUsedProducts.length > 0 ? (
+                topUsedProducts.map((product) => (
+                  <button
+                    key={product.id}
+                    type="button"
+                    className="quick-fill-btn"
+                    onClick={() => quickSelectProduct(product.id)}
+                  >
+                    {product.name} ({Number(product?.usageCount) || 0})
+                  </button>
+                ))
+              ) : (
+                <span className="muted-label">Sin historial aún.</span>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="items-stack">
           {items.map((item, index) => (
             <div key={`item-${index}`} className="item-row">
+              {(() => {
+                const itemIsConfirmed = isItemConfirmed(index)
+                const selectedProduct = productById[item.productId]
+                const itemOptions = item.productId && selectedProduct
+                  ? [selectedProduct, ...filteredProducts.filter((product) => product.id !== item.productId)]
+                  : filteredProducts
+
+                return (
+                  <>
               <select
+                ref={(element) => {
+                  itemProductRefs.current[index] = element
+                }}
                 value={item.productId}
                 onChange={(event) =>
                   handleItemChange(index, 'productId', event.target.value)
                 }
+                onFocus={() => setActiveItemIndex(index)}
                 required
+                disabled={itemIsConfirmed}
               >
                 <option value="">Seleccionar producto</option>
-                {sortedProducts.map((product) => (
+                {itemOptions.map((product) => (
                   <option key={product.id} value={product.id}>
                     {product.name}
                   </option>
@@ -549,7 +893,9 @@ function OrdersForm({
                 onChange={(event) =>
                   handleItemChange(index, 'quantity', event.target.value)
                 }
+                onFocus={() => setActiveItemIndex(index)}
                 placeholder="Cantidad"
+                disabled={itemIsConfirmed}
               />
               <input
                 type="number"
@@ -558,7 +904,9 @@ function OrdersForm({
                 onChange={(event) =>
                   handleItemChange(index, 'unitPrice', event.target.value)
                 }
+                onFocus={() => setActiveItemIndex(index)}
                 placeholder="Precio unitario"
+                disabled={itemIsConfirmed}
               />
               <button
                 type="button"
@@ -568,6 +916,27 @@ function OrdersForm({
                 Quitar
               </button>
 
+              {!itemIsConfirmed ? (
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => confirmItem(index)}
+                  disabled={!item.productId}
+                >
+                  Confirmar
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="quick-fill-btn"
+                  onClick={() => unlockItem(index)}
+                >
+                  Editar
+                </button>
+              )}
+
+              {itemIsConfirmed && <span className="order-item-confirmed-badge">Confirmado</span>}
+
               <label className="item-material-toggle">
                 <input
                   type="checkbox"
@@ -575,6 +944,7 @@ function OrdersForm({
                   onChange={(event) =>
                     handleItemChange(index, 'isClientMaterial', event.target.checked)
                   }
+                  disabled={itemIsConfirmed}
                 />
                 Material provisto por el cliente
               </label>
@@ -601,6 +971,13 @@ function OrdersForm({
                     Pedido solicitado: {lineQuantity}<br />
                     Faltante estimado: {shortageUnits}
                   </p>
+                )
+              })()}
+
+              {!item.productId && filteredProducts.length === 0 && (
+                <p className="payment-helper">No hay productos para ese filtro. Probá con categoría TODOS.</p>
+              )}
+                  </>
                 )
               })()}
             </div>

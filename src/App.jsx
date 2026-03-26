@@ -58,6 +58,7 @@ function App() {
     registerOrderReturn,
     updateStock,
     updateProductReferenceCost,
+    markProductAsUsed,
   } = useProductsState()
   const { purchases, createPurchase } = usePurchasesState(
     (productId, quantity, reason, date) => {
@@ -474,6 +475,7 @@ function App() {
                 onUpdateOrderUrgency={updateOrderUrgency}
                 onDeleteCancelledOrder={deleteCancelledOrder}
                 onCreateClient={handleCreateClient}
+                onMarkProductAsUsed={markProductAsUsed}
               />
             }
           />

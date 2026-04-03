@@ -557,8 +557,6 @@ function OrdersList({
       method: draft.method,
     })
 
-    const nextRemainingDebt = Math.max(remainingDebt - amount, 0)
-
     setPaymentDrafts((prevDrafts) => ({
       ...prevDrafts,
       [targetOrderId]: {
@@ -567,9 +565,7 @@ function OrdersList({
       },
     }))
 
-    if (nextRemainingDebt <= 0) {
-      handleClosePaymentQuickModal()
-    }
+    handleClosePaymentQuickModal()
   }
 
   const deliveryConfirmTarget = useMemo(

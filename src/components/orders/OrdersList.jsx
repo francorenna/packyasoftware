@@ -94,6 +94,21 @@ const parseCreatedTimestamp = (value) => {
   return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp
 }
 
+const getDaysSinceDelivery = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+
+  const [year, month, day] = value.split('-').map(Number)
+  const deliveryDate = new Date(year, month - 1, day)
+  if (Number.isNaN(deliveryDate.getTime())) return null
+
+  const today = new Date()
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const deliveryOnly = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate())
+  const diffMs = todayOnly.getTime() - deliveryOnly.getTime()
+  const days = Math.max(0, Math.floor(diffMs / 86400000))
+  return days
+}
+
 const orderSectionMeta = {
   production: {
     title: 'Producción',
@@ -494,6 +509,14 @@ function OrdersList({
     })
     onUpdateOrderStatus?.(targetOrderId, 'Entregado')
     handleCancelDeliveryConfirmation()
+
+    const shouldRegisterPaymentNow = window.confirm(
+      'Entrega confirmada.\n¿Querés registrar un pago ahora?',
+    )
+
+    if (shouldRegisterPaymentNow) {
+      openPaymentQuickModal(targetOrderId)
+    }
   }
 
   const handleDeliveryOverlayClick = (event) => {
@@ -738,6 +761,7 @@ function OrdersList({
                 financialStatus,
               } = getOrderFinancialSummary(order)
               const isDeliveredWithDebt = !order.isSample && orderStatus === 'Entregado' && remainingDebt > 0
+              const deliveryAgeDays = getDaysSinceDelivery(order?.deliveryDate)
               const isReadyPendingDelivery = !order.isSample && orderStatus === 'Listo'
               const statusLabel = isDeliveredWithDebt
                 ? `Entregado – Deuda ${formatCurrency(remainingDebt)}`
@@ -1161,6 +1185,11 @@ function OrdersList({
                           {`${getOrderStatusIcon(orderStatus)} ${statusLabel}`}
                         </span>
                         {hasItems && <span className="order-items-progress-badge">{itemsProgressLabel}</span>}
+                        {isDeliveredWithDebt && Number.isInteger(deliveryAgeDays) && (
+                          <span className="order-collection-age-badge">
+                            ⏳ Hace {deliveryAgeDays} {deliveryAgeDays === 1 ? 'día' : 'días'}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td>

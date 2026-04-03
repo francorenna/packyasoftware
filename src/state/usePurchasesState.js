@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createDebouncedStorageWriter } from '../utils/storageDebounce'
 
 const PURCHASES_STORAGE_KEY = 'packya_purchases'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -110,14 +111,36 @@ const loadPurchases = () => {
 
 function usePurchasesState(onPurchaseStockEntry) {
   const [purchases, setPurchases] = useState(() => loadPurchases())
+  const purchasesStorageWriter = useMemo(
+    () => createDebouncedStorageWriter({
+      key: PURCHASES_STORAGE_KEY,
+      storageGetter: () => (typeof window !== 'undefined' ? window.localStorage : null),
+      label: 'purchases',
+    }),
+    [],
+  )
 
   useEffect(() => {
-    try {
-      localStorage.setItem(PURCHASES_STORAGE_KEY, JSON.stringify(purchases))
-    } catch (error) {
-      void error
+    purchasesStorageWriter.schedule(purchases)
+  }, [purchases, purchasesStorageWriter])
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      purchasesStorageWriter.flush()
     }
-  }, [purchases])
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload)
+      }
+      purchasesStorageWriter.flush()
+      purchasesStorageWriter.cancel()
+    }
+  }, [purchasesStorageWriter])
 
   const createPurchase = (purchaseData) => {
     const items = Array.isArray(purchaseData.items)

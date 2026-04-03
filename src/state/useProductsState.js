@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createDebouncedStorageWriter } from '../utils/storageDebounce'
 
 const PRODUCTS_STORAGE_KEY = 'packya_products'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -236,6 +237,14 @@ const loadProductsFromStorage = () => {
 
 function useProductsState() {
   const [products, setProducts] = useState(() => loadProductsFromStorage())
+  const productsStorageWriter = useMemo(
+    () => createDebouncedStorageWriter({
+      key: PRODUCTS_STORAGE_KEY,
+      storageGetter: () => (typeof window !== 'undefined' ? window.localStorage : null),
+      label: 'products',
+    }),
+    [],
+  )
 
   const withRecalculatedStock = (product) => ({
     ...product,
@@ -262,17 +271,31 @@ function useProductsState() {
   }
 
   useEffect(() => {
+    productsStorageWriter.schedule(products)
     try {
-      localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(products))
-      try {
-        localStorage.setItem('packya_storage_version', String(STORAGE_VERSION))
-      } catch (error) {
-        void error
-      }
+      localStorage.setItem('packya_storage_version', String(STORAGE_VERSION))
     } catch (error) {
       void error
     }
-  }, [products])
+  }, [products, productsStorageWriter])
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      productsStorageWriter.flush()
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload)
+      }
+      productsStorageWriter.flush()
+      productsStorageWriter.cancel()
+    }
+  }, [productsStorageWriter])
 
   const upsertProduct = (productData) => {
     const normalizedName = String(productData.name ?? '').trim()
@@ -293,13 +316,16 @@ function useProductsState() {
       const existingProduct = prevProducts.find(
         (product) => product.id === normalizedProductBase.id,
       )
+      const hasIncomingImage = Object.prototype.hasOwnProperty.call(productData, 'image')
 
       const normalizedProduct = {
         ...normalizedProductBase,
         stockTotal: existingProduct?.stockTotal ?? 0,
         referenceCost: normalizedProductBase.referenceCost,
         salePrice: normalizedProductBase.salePrice,
-        image: normalizedProductBase.image || normalizeImage(existingProduct?.image),
+        image: hasIncomingImage
+          ? normalizedProductBase.image
+          : normalizeImage(existingProduct?.image),
         usageCount: toUsageCount(existingProduct?.usageCount),
         lastUsedAt: toTimestampString(existingProduct?.lastUsedAt),
         stockMovements: existingProduct?.stockMovements ?? [],

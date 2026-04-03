@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { getOrderFinancialSummary } from '../utils/finance'
+import { formatOrderId } from '../utils/orders'
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
 
@@ -36,10 +37,11 @@ const formatDateTime = (value) => {
   })
 }
 
-function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSampleToRealOrder }) {
-  const safeOrders = Array.isArray(orders) ? orders : []
+function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSampleToRealOrder, onDuplicateOrder }) {
+  const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
   const [sampleConversionOrderId, setSampleConversionOrderId] = useState(null)
   const [sampleClientForm, setSampleClientForm] = useState(() => createClientForm())
+  const [detailOrderId, setDetailOrderId] = useState(null)
 
   const archivedOrders = useMemo(
     () =>
@@ -122,9 +124,11 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
             <tbody>
               {archivedOrders.map((order, index) => {
                 const orderId = String(order.id ?? `archivado-${index}`)
+                const displayOrderId = formatOrderId(orderId)
 
                 return (
-                  <tr key={orderId}>
+                  <Fragment key={orderId}>
+                  <tr>
                     <td>{String(order.clientName ?? order.client ?? 'Sin cliente')}</td>
                     <td>
                       {order.isSample ? (
@@ -152,19 +156,73 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
                           Dar alta como cliente
                         </button>
                       ) : (
-                        <button
-                          type="button"
-                          className="secondary-btn"
-                          onClick={() => {
-                            onReopenOrder?.(orderId)
-                            window.location.hash = `#/pedidos?open=${encodeURIComponent(orderId)}`
-                          }}
-                        >
-                          Reabrir pedido
-                        </button>
+                        <div className="product-row-actions">
+                          <button
+                            type="button"
+                            className="quick-fill-btn"
+                            onClick={() =>
+                              setDetailOrderId((prev) => (prev === orderId ? null : orderId))
+                            }
+                          >
+                            {detailOrderId === orderId ? 'Ocultar' : 'Ver detalle'}
+                          </button>
+                          <button
+                            type="button"
+                            className="quick-fill-btn"
+                            onClick={() => {
+                              onReopenOrder?.(orderId)
+                              window.location.hash = `#/pedidos?open=${encodeURIComponent(orderId)}`
+                            }}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="quick-fill-btn"
+                            onClick={() => onDuplicateOrder?.(orderId)}
+                          >
+                            Duplicar
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
+
+                  {detailOrderId === orderId && !order.isSample && (
+                    <tr key={`${orderId}-detail`}>
+                      <td colSpan={9}>
+                        <div className="client-accordion-panel" style={{ padding: '10px 0' }}>
+                          <p><strong>ID:</strong> {displayOrderId}</p>
+                          <p><strong>Estado:</strong> {String(order.status ?? '-')}</p>
+                          <p><strong>Nota financiera:</strong> {String(order.financialNote ?? '').trim() || '-'}</p>
+                          <table className="orders-table" style={{ marginTop: 8 }}>
+                            <thead>
+                              <tr>
+                                <th>Producto</th>
+                                <th>Cantidad</th>
+                                <th>Precio unit.</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(Array.isArray(order.items) ? order.items : []).map((item, i) => (
+                                <tr key={i}>
+                                  <td>{String(item.productName ?? item.product ?? '-')}</td>
+                                  <td>{Number(item.quantity)}</td>
+                                  <td>{formatCurrency(item.unitPrice)}</td>
+                                </tr>
+                              ))}
+                              {(Array.isArray(order.items) ? order.items : []).length === 0 && (
+                                <tr>
+                                  <td colSpan={3} className="empty-detail">Sin ítems registrados.</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
 

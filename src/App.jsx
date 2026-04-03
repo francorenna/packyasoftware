@@ -37,6 +37,7 @@ function App() {
   const {
     orders,
     createOrder,
+    duplicateOrder,
     registerPayment,
     updateOrderStatus,
     updateOrderDelivery,
@@ -501,6 +502,7 @@ function App() {
                 onReopenOrder={reopenOrder}
                 onCreateClient={upsertClient}
                 onConvertSampleToRealOrder={convertSampleToRealOrder}
+                onDuplicateOrder={duplicateOrder}
               />
             }
           />

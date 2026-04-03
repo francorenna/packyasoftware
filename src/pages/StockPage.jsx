@@ -74,9 +74,9 @@ const modalBodyStyle = {
 }
 
 function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProductReferenceCost }) {
-  const safeProducts = Array.isArray(products) ? products : []
-  const safeOrders = Array.isArray(orders) ? orders : []
-  const safePurchases = Array.isArray(purchases) ? purchases : []
+  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
+  const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
+  const safePurchases = useMemo(() => (Array.isArray(purchases) ? purchases : []), [purchases])
   const [open, setOpen] = useState(false)
   const [productId, setProductId] = useState('')
   const [mode, setMode] = useState('sum') // 'sum' or 'sub'
@@ -821,6 +821,7 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
                 <th>Cantidad requerida</th>
                 <th>Stock actual</th>
                 <th>Faltante estimado</th>
+                <th>Estado</th>
               </tr>
             </thead>
             <tbody>
@@ -830,12 +831,19 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
                   <td>{row.required}</td>
                   <td>{row.stock}</td>
                   <td className={row.missing > 0 ? 'finance-result-negative' : ''}>{row.missing}</td>
+                  <td>
+                    {row.missing > 0 ? (
+                      <span className="status-badge status-pendiente" style={stockAlertBadgeStyle}>⚠ Stock insuficiente</span>
+                    ) : (
+                      <span style={stockAlertBadgeStyle}>-</span>
+                    )}
+                  </td>
                 </tr>
               ))}
 
               {shortageCalculatorRows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="empty-detail">
+                  <td colSpan={5} className="empty-detail">
                     No hay productos para calcular faltantes.
                   </td>
                 </tr>

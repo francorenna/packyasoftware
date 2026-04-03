@@ -4,6 +4,7 @@ import { getClientsWithDebtCount } from '../utils/clients'
 import { calculateStockSnapshot } from '../utils/stock'
 import { calculateFinanceSummary, getCurrentMonthKey, getSampleMetrics } from '../utils/finance'
 import { getDashboardProductionMetrics } from '../utils/production'
+import { formatOrderId } from '../utils/orders'
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -140,6 +141,24 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
     [products, safeOrders],
   )
 
+  const dailySummary = useMemo(() => {
+    const todayKey = formatDateInput(new Date())
+
+    return safeOrders.reduce(
+      (acc, order) => {
+        if (order?.isArchived === true) return acc
+        if (String(order?.deliveryDate ?? '') !== todayKey) return acc
+
+        const status = String(order?.status ?? '')
+        if (status === 'Pendiente') acc.pending += 1
+        if (status === 'En Proceso') acc.inProgress += 1
+        if (status === 'Listo') acc.toDeliver += 1
+        return acc
+      },
+      { pending: 0, inProgress: 0, toDeliver: 0 },
+    )
+  }, [safeOrders])
+
   const productionMetrics = useMemo(
     () => getDashboardProductionMetrics(safeOrders),
     [safeOrders],
@@ -174,6 +193,26 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
         </article>
       </section>
 
+      <section className="dashboard-recent">
+        <div className="card-head">
+          <h3>Resumen del día</h3>
+        </div>
+        <div className="dashboard-day-summary-grid">
+          <article className="dashboard-card dashboard-day-summary-card">
+            <p>🟡 Pedidos pendientes</p>
+            <strong>{String(dailySummary.pending)}</strong>
+          </article>
+          <article className="dashboard-card dashboard-day-summary-card">
+            <p>🔵 En proceso</p>
+            <strong>{String(dailySummary.inProgress)}</strong>
+          </article>
+          <article className="dashboard-card dashboard-day-summary-card">
+            <p>🚚 Por entregar</p>
+            <strong>{String(dailySummary.toDeliver)}</strong>
+          </article>
+        </div>
+      </section>
+
       <div className="dashboard-grid">
         {cards.map((card) => (
           <article key={card.label} className="dashboard-card">
@@ -206,7 +245,7 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
                   className="dashboard-row-link"
                   onClick={() => navigate(`/pedidos?open=${encodeURIComponent(order.id)}`)}
                 >
-                  <td>{order.id}</td>
+                  <td>{formatOrderId(order.id)}</td>
                   <td>{order.clientName || order.client || 'Sin cliente'}</td>
                   <td>{formatShortDate(order.deliveryDate)}</td>
                   <td>{order.status}</td>

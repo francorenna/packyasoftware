@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createDebouncedStorageWriter } from '../utils/storageDebounce'
 
 const ORDERS_STORAGE_KEY = 'packya_orders'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -281,14 +282,36 @@ const loadOrdersFromStorage = () => {
 
 function useOrdersState() {
   const [orders, setOrders] = useState(() => loadOrdersFromStorage())
+  const ordersStorageWriter = useMemo(
+    () => createDebouncedStorageWriter({
+      key: ORDERS_STORAGE_KEY,
+      storageGetter: () => (typeof window !== 'undefined' ? window.localStorage : null),
+      label: 'orders',
+    }),
+    [],
+  )
 
   useEffect(() => {
-    try {
-      localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(orders))
-    } catch (error) {
-      void error
+    ordersStorageWriter.schedule(orders)
+  }, [orders, ordersStorageWriter])
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      ordersStorageWriter.flush()
     }
-  }, [orders])
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload)
+      }
+      ordersStorageWriter.flush()
+      ordersStorageWriter.cancel()
+    }
+  }, [ordersStorageWriter])
 
   const createOrder = (newOrder) => {
     const safeItems = Array.isArray(newOrder?.items)
@@ -316,9 +339,16 @@ function useOrdersState() {
           .filter(Boolean)
       : []
 
-    setOrders((prevOrders) => [
-      applyAutoArchive({
+    setOrders((prevOrders) => {
+      // Generar ID único con verificación de colisión
+      let finalId = String(newOrder.id ?? '').trim()
+      while (!finalId || prevOrders.some((o) => o.id === finalId)) {
+        finalId = `PED-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+      }
+
+      const newOrderEntry = applyAutoArchive({
         ...newOrder,
+        id: finalId,
         clientId: String(newOrder.clientId ?? ''),
         clientName: String(newOrder.clientName ?? newOrder.client ?? 'Sin cliente'),
         client: String(newOrder.clientName ?? newOrder.client ?? 'Sin cliente'),
@@ -341,9 +371,47 @@ function useOrdersState() {
         payments: [],
         financialAdjustments: [],
         isSample: Boolean(newOrder.isSample ?? false),
-      }),
-      ...prevOrders,
-    ])
+      })
+
+      const nextOrders = [newOrderEntry, ...prevOrders]
+
+      // Validación post-guardado
+      console.assert(
+        nextOrders.some((o) => o.id === finalId),
+        `[Packya] Error al guardar pedido ${finalId}`,
+      )
+
+      if (!nextOrders.some((o) => o.id === finalId)) {
+        window.alert('Error al guardar pedido')
+      }
+
+      return nextOrders
+    })
+  }
+
+  const duplicateOrder = (orderId) => {
+    setOrders((prevOrders) => {
+      const original = prevOrders.find((o) => o.id === orderId)
+      if (!original) return prevOrders
+
+      let newId
+      do {
+        newId = `PED-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+      } while (prevOrders.some((o) => o.id === newId))
+
+      const duplicated = applyAutoArchive({
+        ...original,
+        id: newId,
+        status: 'Pendiente',
+        createdAt: new Date().toISOString(),
+        isArchived: false,
+        archivedAt: null,
+        payments: [],
+        financialAdjustments: [],
+      })
+
+      return [duplicated, ...prevOrders]
+    })
   }
 
   const registerPayment = (orderId, paymentData) => {
@@ -680,6 +748,7 @@ function useOrdersState() {
   return {
     orders,
     createOrder,
+    duplicateOrder,
     registerPayment,
     updateOrderStatus,
     updateOrderDelivery,

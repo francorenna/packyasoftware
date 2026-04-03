@@ -159,7 +159,9 @@ function ProductsPage({
   onAdjustStock,
 }) {
   const [form, setForm] = useState(createInitialForm())
-  const [quickEditingId, setQuickEditingId] = useState(null)
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false)
+  const [productSearchQuery, setProductSearchQuery] = useState('')
+  const [expandedProductId, setExpandedProductId] = useState(null)
   const [quickDrafts, setQuickDrafts] = useState({})
   const [adjustingProductId, setAdjustingProductId] = useState(null)
   const [historyProductId, setHistoryProductId] = useState(null)
@@ -204,6 +206,30 @@ function ProductsPage({
     })
   }, [stockRows])
 
+  const filteredGroupedProducts = useMemo(() => {
+    const query = String(productSearchQuery ?? '').trim().toLowerCase()
+    if (!query) return groupedProducts
+
+    return groupedProducts
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((product) => {
+          const name = String(product?.name ?? '').toLowerCase()
+          const category = String(getCategoryFromProduct(product) ?? '').toLowerCase()
+          const measure = String(getProductMeasure(product?.name) ?? '').toLowerCase()
+          return name.includes(query) || category.includes(query) || measure.includes(query)
+        }),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [groupedProducts, productSearchQuery])
+
+  const formatCurrency = (value) =>
+    new Intl.NumberFormat('es-AR', {
+      style: 'currency',
+      currency: 'ARS',
+      maximumFractionDigits: 0,
+    }).format(Number(value || 0))
+
   const handleInput = (field, value) => {
     setForm((prevForm) => ({
       ...prevForm,
@@ -228,6 +254,13 @@ function ProductsPage({
       image: form.image,
     })
 
+    setForm(createInitialForm())
+    setImageUploadError('')
+    setIsFormModalOpen(false)
+  }
+
+  const closeFormModal = () => {
+    setIsFormModalOpen(false)
     setForm(createInitialForm())
     setImageUploadError('')
   }
@@ -265,6 +298,19 @@ function ProductsPage({
 
     try {
       const image = await compressImageToBase64(file)
+      const product = stockRows.find((row) => String(row?.id ?? '') === String(productId))
+      if (product) {
+        const nextName = String(quickDrafts[productId]?.name ?? product.name ?? '').trim()
+        onSaveProduct({
+          id: product.id,
+          name: nextName || String(product.name ?? ''),
+          category: normalizeCategory(quickDrafts[productId]?.category) || getCategoryFromProduct(product),
+          stockMinimo: Math.max(Number(quickDrafts[productId]?.stockMinimo ?? product.stockMinimo ?? 0), 0),
+          referenceCost: Math.max(Number(quickDrafts[productId]?.referenceCost ?? product.referenceCost ?? 0), 0),
+          salePrice: Math.max(Number(quickDrafts[productId]?.salePrice ?? product.salePrice ?? 0), 0),
+          image,
+        })
+      }
       updateQuickDraft(productId, 'image', image)
       setImageUploadError('')
     } catch (error) {
@@ -274,33 +320,27 @@ function ProductsPage({
     }
   }
 
-  const handleReplaceImage = async (product, event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+  const handleRemoveQuickImage = (productId) => {
+    const product = stockRows.find((row) => String(row?.id ?? '') === String(productId))
+    if (!product) return
 
-    try {
-      const image = await compressImageToBase64(file)
-      onSaveProduct({
-        id: product.id,
-        name: product.name,
-        category: getCategoryFromProduct(product),
-        stockMinimo: Math.max(Number(product.stockMinimo || 0), 0),
-        referenceCost: Math.max(Number(product.referenceCost || 0), 0),
-        salePrice: Math.max(Number(product.salePrice || 0), 0),
-        image,
-      })
-      setImageUploadError('')
-    } catch (error) {
-      setImageUploadError(String(error?.message ?? 'No se pudo cargar la imagen.'))
-    } finally {
-      event.target.value = ''
-    }
+    const nextName = String(quickDrafts[productId]?.name ?? product.name ?? '').trim()
+    onSaveProduct({
+      id: product.id,
+      name: nextName || String(product.name ?? ''),
+      category: normalizeCategory(quickDrafts[productId]?.category) || getCategoryFromProduct(product),
+      stockMinimo: Math.max(Number(quickDrafts[productId]?.stockMinimo ?? product.stockMinimo ?? 0), 0),
+      referenceCost: Math.max(Number(quickDrafts[productId]?.referenceCost ?? product.referenceCost ?? 0), 0),
+      salePrice: Math.max(Number(quickDrafts[productId]?.salePrice ?? product.salePrice ?? 0), 0),
+      image: '',
+    })
+    updateQuickDraft(productId, 'image', '')
   }
 
   const openQuickEdit = (product) => {
     if (!product?.id) return
 
-    setQuickEditingId(product.id)
+    setExpandedProductId(product.id)
     setQuickDrafts((prev) => ({
       ...prev,
       [product.id]: createQuickDraft(product),
@@ -308,7 +348,7 @@ function ProductsPage({
   }
 
   const closeQuickEdit = (productId) => {
-    setQuickEditingId((currentId) => (currentId === productId ? null : currentId))
+    setExpandedProductId((currentId) => (currentId === productId ? null : currentId))
     setQuickDrafts((prev) => {
       const next = { ...prev }
       delete next[productId]
@@ -329,6 +369,8 @@ function ProductsPage({
 
       const normalizedValue = field === 'name'
         ? value
+        : field === 'image'
+          ? String(value ?? '')
         : field === 'category'
           ? normalizeCategory(value) || 'OTRO'
           : Math.max(Number(value) || 0, 0)
@@ -379,6 +421,18 @@ function ProductsPage({
     setAdjustingProductId((currentId) => (currentId === productId ? null : currentId))
   }
 
+  const toggleExpandedProduct = (product) => {
+    const productId = String(product?.id ?? '')
+    if (!productId) return
+
+    if (expandedProductId === productId) {
+      closeQuickEdit(productId)
+      return
+    }
+
+    openQuickEdit(product)
+  }
+
   const openAdjustPanel = (product) => {
     setAdjustingProductId(product.id)
     setAdjustment(createInitialAdjustment())
@@ -416,227 +470,124 @@ function ProductsPage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2 className="section-title">Productos</h2>
-        <p>Gestioná catálogo y stock base para reservas dinámicas en pedidos.</p>
+        <div className="page-header-row">
+          <div>
+            <h2 className="section-title">Productos</h2>
+            <p>Gestioná catálogo y stock base para reservas dinámicas en pedidos.</p>
+          </div>
+          <button type="button" className="primary-btn" onClick={() => setIsFormModalOpen(true)}>
+            + Nuevo producto
+          </button>
+        </div>
       </header>
 
-      <div className="products-grid">
-        <section className="card-block">
-          <div className="card-head">
-            <h3>Nuevo producto</h3>
-          </div>
-
-          <form className="order-form" onSubmit={handleSubmit}>
-            <label>
-              Nombre
-              <input
-                type="text"
-                value={form.name}
-                onChange={(event) => handleInput('name', event.target.value)}
-                placeholder="Nombre del producto"
-                required
-              />
-            </label>
-
-            <label>
-              Categoría
-              <select
-                value={form.category}
-                onChange={(event) => handleInput('category', event.target.value)}
-              >
-                {PRODUCT_CATEGORIES.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Stock mínimo
-              <input
-                type="number"
-                min="0"
-                value={form.stockMinimo}
-                onChange={(event) => handleInput('stockMinimo', event.target.value)}
-              />
-            </label>
-
-            <label>
-              Costo de referencia por unidad
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.referenceCost}
-                onChange={(event) => handleInput('referenceCost', event.target.value)}
-              />
-              <p className="payment-helper">
-                Este costo se usa para estimaciones si no hay compras registradas.
-              </p>
-            </label>
-
-            <label>
-              Precio de venta sugerido
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.salePrice}
-                onChange={(event) => handleInput('salePrice', event.target.value)}
-              />
-            </label>
-
-            <div className="product-actions">
-              <button type="submit" className="primary-btn">
-                Agregar producto
-              </button>
-            </div>
-
-            <div className="product-image-upload-row">
-              <label className="secondary-btn upload-btn" htmlFor="new-product-image-input">
-                Subir imagen
-              </label>
-              <input
-                id="new-product-image-input"
-                type="file"
-                accept="image/png,image/jpeg"
-                onChange={handleFormImageUpload}
-                className="image-file-input"
-              />
-              <p className="payment-helper">Formatos: JPG/PNG. Tamaño recomendado: hasta 200kb.</p>
-              <span className={`image-status-badge ${form.image ? 'image-status-ok' : 'image-status-empty'}`}>
-                {form.image ? 'Imagen cargada' : 'Sin imagen'}
-              </span>
-              {form.image ? (
-                <img src={form.image} alt="Vista previa" className="product-thumbnail" />
-              ) : null}
-              {imageUploadError ? <p className="payment-error">{imageUploadError}</p> : null}
-            </div>
-          </form>
-        </section>
-
+      <div className="products-grid products-grid-single">
         <section className="card-block">
           <div className="card-head">
             <h3>Panel de productos por categoría</h3>
           </div>
 
-          {groupedProducts.map((group) => (
-            <div key={group.key}>
-              <h4>{group.title}</h4>
-              <div className="table-wrap">
-                <table className="products-table">
-                  <thead>
-                    <tr>
-                      <th>Producto</th>
-                      <th>Medida</th>
-                      <th>Costo</th>
-                      <th>Precio</th>
-                      <th>Stock</th>
-                      <th>Mínimo</th>
-                      <th>Categoría</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.items.map((product) => {
-                      const isEditing = quickEditingId === product.id
-                      const draft = quickDrafts[product.id] ?? createQuickDraft(product)
+          <div className="products-panel-toolbar">
+            <input
+              type="text"
+              value={productSearchQuery}
+              onChange={(event) => setProductSearchQuery(event.target.value)}
+              placeholder="Buscar producto por nombre, categoría o medida..."
+            />
+            <span className="muted-label">
+              {filteredGroupedProducts.reduce((acc, group) => acc + group.items.length, 0)} resultados
+            </span>
+          </div>
 
-                      return (
-                        <tr key={product.id}>
-                          <td>
-                            {isEditing ? (
+          {filteredGroupedProducts.map((group) => (
+            <div key={group.key} className="products-accordion-group">
+              <h4>{group.title}</h4>
+              <div className="product-accordion-list">
+                {group.items.map((product) => {
+                  const productId = String(product.id ?? '')
+                  const isExpanded = expandedProductId === productId
+                  const draft = quickDrafts[productId] ?? createQuickDraft(product)
+                  const productCategory = getCategoryFromProduct(product)
+
+                  return (
+                    <article
+                      key={productId}
+                      className={`product-accordion-item ${isExpanded ? 'product-accordion-item-expanded' : ''}`}
+                    >
+                      <button
+                        type="button"
+                        className="product-accordion-header"
+                        onClick={() => toggleExpandedProduct(product)}
+                        aria-expanded={isExpanded}
+                      >
+                        <div className="product-accordion-header-main">
+                          <div className="product-accordion-title-row">
+                            <span className="product-accordion-icon">{categoryIcons[productCategory] ?? '⚙️'}</span>
+                            <span className="product-accordion-name">{product.name}</span>
+                            <span className={`category-badge ${categoryClassNames[productCategory] ?? 'category-otro'}`}>
+                              {productCategory}
+                            </span>
+                            <span className={`image-status-badge product-image-indicator ${product.image ? 'image-status-ok' : 'image-status-empty'}`}>
+                              {product.image ? '📷 Tiene imagen' : '⚠ Sin imagen'}
+                              {product.image ? (
+                                <span className="product-image-hover-card" aria-hidden="true">
+                                  <img
+                                    src={String(product.image ?? '')}
+                                    alt={String(product.name ?? 'Producto')}
+                                    className="product-image-hover-preview"
+                                  />
+                                </span>
+                              ) : null}
+                            </span>
+                          </div>
+                          <div className="product-accordion-summary">
+                            <span><strong>Medida:</strong> {getProductMeasure(product.name)}</span>
+                            <span><strong>Stock:</strong> {product.stockDisponible}</span>
+                            <span><strong>Costo:</strong> {formatCurrency(product.referenceCost)}</span>
+                            <span><strong>Precio:</strong> {formatCurrency(product.salePrice)}</span>
+                          </div>
+                        </div>
+                        <span className="product-accordion-chevron" aria-hidden="true">
+                          {isExpanded ? '−' : '+'}
+                        </span>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="product-accordion-panel">
+                          <div className="product-accordion-stats">
+                            <div className="product-accordion-stat">
+                              <span>Costo actual</span>
+                              <strong>{formatCurrency(draft.referenceCost)}</strong>
+                            </div>
+                            <div className="product-accordion-stat">
+                              <span>Precio actual</span>
+                              <strong>{formatCurrency(draft.salePrice)}</strong>
+                            </div>
+                            <div className="product-accordion-stat">
+                              <span>Stock disponible</span>
+                              <strong>{product.stockDisponible}</strong>
+                            </div>
+                            <div className="product-accordion-stat">
+                              <span>Stock mínimo</span>
+                              <strong>{draft.stockMinimo}</strong>
+                            </div>
+                          </div>
+
+                          <div className="product-accordion-edit-grid">
+                            <label>
+                              Nombre
                               <input
                                 type="text"
                                 value={draft.name}
-                                onChange={(event) => updateQuickDraft(product.id, 'name', event.target.value)}
+                                onChange={(event) => updateQuickDraft(productId, 'name', event.target.value)}
                               />
-                            ) : (
-                              <span className="product-category-line">
-                                <span>{categoryIcons[getCategoryFromProduct(product)] ?? '⚙️'}</span>
-                                <span
-                                  className={`category-badge ${categoryClassNames[getCategoryFromProduct(product)] ?? 'category-otro'}`}
-                                >
-                                  {getCategoryFromProduct(product)}
-                                </span>
-                                <span className={`image-status-badge ${product.image ? 'image-status-ok' : 'image-status-empty'}`}>
-                                  {product.image ? 'Imagen cargada' : 'Sin imagen'}
-                                </span>
-                                {product.image ? (
-                                  <button
-                                    type="button"
-                                    className="product-image-preview-btn"
-                                    onClick={() =>
-                                      setPreviewImage({
-                                        isOpen: true,
-                                        src: String(product.image ?? ''),
-                                        name: String(product.name ?? 'Producto'),
-                                      })
-                                    }
-                                  >
-                                    <img src={product.image} alt="Producto" className="product-thumbnail" />
-                                  </button>
-                                ) : null}
-                                <span>{product.name}</span>
-                              </span>
-                            )}
-                          </td>
-                          <td>{getProductMeasure(isEditing ? draft.name : product.name)}</td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={draft.referenceCost}
-                                onChange={(event) => updateQuickDraft(product.id, 'referenceCost', event.target.value)}
-                              />
-                            ) : (
-                              <span>
-                                {Number(product.referenceCost || 0)}
-                                {Number(product.referenceCost || 0) === 0 ? (
-                                  <span className="product-alert-inline">⚠ Sin costo</span>
-                                ) : null}
-                              </span>
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={draft.salePrice}
-                                onChange={(event) => updateQuickDraft(product.id, 'salePrice', event.target.value)}
-                              />
-                            ) : (
-                              <span>
-                                {Number(product.salePrice || 0)}
-                                {Number(product.salePrice || 0) === 0 ? (
-                                  <span className="product-alert-inline">⚠ Sin precio</span>
-                                ) : null}
-                              </span>
-                            )}
-                          </td>
-                          <td>{product.stockDisponible}</td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                type="number"
-                                min="0"
-                                value={draft.stockMinimo}
-                                onChange={(event) => updateQuickDraft(product.id, 'stockMinimo', event.target.value)}
-                              />
-                            ) : (
-                              product.stockMinimo
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
+                            </label>
+
+                            <label>
+                              Categoría
                               <select
                                 value={draft.category}
-                                onChange={(event) => updateQuickDraft(product.id, 'category', event.target.value)}
+                                onChange={(event) => updateQuickDraft(productId, 'category', event.target.value)}
                               >
                                 {PRODUCT_CATEGORIES.map((category) => (
                                   <option key={category} value={category}>
@@ -644,99 +595,254 @@ function ProductsPage({
                                   </option>
                                 ))}
                               </select>
-                            ) : (
-                              getCategoryFromProduct(product)
-                            )}
-                          </td>
-                          <td>
-                            <div className="product-row-actions">
-                              {!isEditing ? (
+                            </label>
+
+                            <label>
+                              Stock mínimo
+                              <input
+                                type="number"
+                                min="0"
+                                value={draft.stockMinimo}
+                                onChange={(event) => updateQuickDraft(productId, 'stockMinimo', event.target.value)}
+                              />
+                            </label>
+
+                            <label>
+                              Costo
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={draft.referenceCost}
+                                onChange={(event) => updateQuickDraft(productId, 'referenceCost', event.target.value)}
+                              />
+                            </label>
+
+                            <label>
+                              Precio
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={draft.salePrice}
+                                onChange={(event) => updateQuickDraft(productId, 'salePrice', event.target.value)}
+                              />
+                            </label>
+                          </div>
+
+                          <div className="product-accordion-media-row">
+                            <div className="product-accordion-image-card">
+                              <p className="product-accordion-image-title">Imagen del producto</p>
+                              {draft.image ? (
+                                <button
+                                  type="button"
+                                  className="product-image-preview-btn"
+                                  onClick={() =>
+                                    setPreviewImage({
+                                      isOpen: true,
+                                      src: String(draft.image ?? ''),
+                                      name: String(draft.name ?? product.name ?? 'Producto'),
+                                    })
+                                  }
+                                >
+                                  <img src={draft.image} alt={draft.name || product.name} className="product-thumbnail" />
+                                </button>
+                              ) : (
+                                <div className="product-thumbnail product-thumbnail-placeholder">Sin imagen</div>
+                              )}
+                              <label className="quick-fill-btn upload-btn" htmlFor={`quick-image-${productId}`}>
+                                Subir imagen
+                              </label>
+                              <input
+                                id={`quick-image-${productId}`}
+                                type="file"
+                                accept="image/png,image/jpeg"
+                                onChange={(event) => handleQuickImageUpload(productId, event)}
+                                className="image-file-input"
+                              />
+                              {draft.image ? (
                                 <button
                                   type="button"
                                   className="quick-fill-btn"
-                                  onClick={() => openQuickEdit(product)}
+                                  onClick={() => handleRemoveQuickImage(productId)}
                                 >
-                                  Editar
+                                  Quitar imagen
                                 </button>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="quick-fill-btn"
-                                    onClick={() => handleSaveQuickEdit(product)}
-                                  >
-                                    Guardar
-                                  </button>
-                                  <label className="quick-fill-btn upload-btn" htmlFor={`quick-image-${product.id}`}>
-                                    Subir imagen
-                                  </label>
-                                  <input
-                                    id={`quick-image-${product.id}`}
-                                    type="file"
-                                    accept="image/png,image/jpeg"
-                                    onChange={(event) => handleQuickImageUpload(product.id, event)}
-                                    className="image-file-input"
-                                  />
-                                  <button
-                                    type="button"
-                                    className="quick-fill-btn"
-                                    onClick={() => closeQuickEdit(product.id)}
-                                  >
-                                    Cancelar
-                                  </button>
-                                </>
-                              )}
-                              <label className="quick-fill-btn upload-btn" htmlFor={`replace-image-${product.id}`}>
-                                Cambiar imagen
-                              </label>
-                              <input
-                                id={`replace-image-${product.id}`}
-                                type="file"
-                                accept="image/png,image/jpeg"
-                                onChange={(event) => handleReplaceImage(product, event)}
-                                className="image-file-input"
-                              />
-                              <button
-                                type="button"
-                                className="quick-fill-btn"
-                                onClick={() => openAdjustPanel(product)}
-                              >
-                                Ajustar stock
-                              </button>
-                              <button
-                                type="button"
-                                className="quick-fill-btn"
-                                onClick={() => toggleHistory(product.id)}
-                              >
-                                Ver historial
-                              </button>
-                              <button
-                                type="button"
-                                className="danger-ghost-btn"
-                                onClick={() => handleDeleteProduct(product)}
-                              >
-                                Eliminar
-                              </button>
+                              ) : null}
                             </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
+                          </div>
 
-                    {group.items.length === 0 && (
-                      <tr>
-                        <td colSpan={8} className="empty-detail">
-                          Sin productos en esta categoría.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                          {imageUploadError ? <p className="payment-error">{imageUploadError}</p> : null}
+
+                          <div className="product-row-actions">
+                            <button
+                              type="button"
+                              className="quick-fill-btn"
+                              onClick={() => handleSaveQuickEdit(product)}
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              type="button"
+                              className="quick-fill-btn"
+                              onClick={() => openAdjustPanel(product)}
+                            >
+                              Ajustar stock
+                            </button>
+                            <button
+                              type="button"
+                              className="quick-fill-btn"
+                              onClick={() => toggleHistory(productId)}
+                            >
+                              Ver historial
+                            </button>
+                            <button
+                              type="button"
+                              className="quick-fill-btn"
+                              onClick={() => closeQuickEdit(productId)}
+                            >
+                              Cerrar
+                            </button>
+                            <button
+                              type="button"
+                              className="danger-ghost-btn"
+                              onClick={() => handleDeleteProduct(product)}
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  )
+                })}
+
+                {group.items.length === 0 && (
+                  <div className="empty-detail product-accordion-empty">
+                    Sin productos en esta categoría.
+                  </div>
+                )}
               </div>
             </div>
           ))}
+
+          {filteredGroupedProducts.length === 0 && (
+            <div className="empty-detail product-accordion-empty">
+              No se encontraron productos con ese criterio.
+            </div>
+          )}
         </section>
       </div>
+
+      {isFormModalOpen && (
+        <div
+          className="modal-overlay order-form-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Nuevo producto"
+          onKeyDown={(event) => { if (event.key === 'Escape') closeFormModal() }}
+        >
+          <div className="order-form-modal entity-form-modal entity-form-modal-compact">
+            <div className="order-form-modal-header">
+              <h3>Nuevo producto</h3>
+              <button type="button" className="secondary-btn" onClick={closeFormModal}>Cerrar</button>
+            </div>
+            <div className="order-form-modal-body">
+              <form className="order-form" onSubmit={handleSubmit}>
+                <label>
+                  Nombre
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(event) => handleInput('name', event.target.value)}
+                    placeholder="Nombre del producto"
+                    required
+                  />
+                </label>
+
+                <label>
+                  Categoría
+                  <select
+                    value={form.category}
+                    onChange={(event) => handleInput('category', event.target.value)}
+                  >
+                    {PRODUCT_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Stock mínimo
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.stockMinimo}
+                    onChange={(event) => handleInput('stockMinimo', event.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Costo de referencia por unidad
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.referenceCost}
+                    onChange={(event) => handleInput('referenceCost', event.target.value)}
+                  />
+                  <p className="payment-helper">
+                    Este costo se usa para estimaciones si no hay compras registradas.
+                  </p>
+                </label>
+
+                <label>
+                  Precio de venta sugerido
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.salePrice}
+                    onChange={(event) => handleInput('salePrice', event.target.value)}
+                  />
+                </label>
+
+                <div className="product-image-upload-row">
+                  <label className="secondary-btn upload-btn" htmlFor="new-product-image-input">
+                    Subir imagen
+                  </label>
+                  <input
+                    id="new-product-image-input"
+                    type="file"
+                    accept="image/png,image/jpeg"
+                    onChange={handleFormImageUpload}
+                    className="image-file-input"
+                  />
+                  <p className="payment-helper">Formatos: JPG/PNG. Tamaño recomendado: hasta 200kb.</p>
+                  <span className={`image-status-badge ${form.image ? 'image-status-ok' : 'image-status-empty'}`}>
+                    {form.image ? 'Imagen cargada' : 'Sin imagen'}
+                  </span>
+                  {form.image ? (
+                    <img src={form.image} alt="Vista previa" className="product-thumbnail" />
+                  ) : null}
+                  {imageUploadError ? <p className="payment-error">{imageUploadError}</p> : null}
+                </div>
+
+                <div className="order-form-actions">
+                  <button type="button" className="secondary-btn" onClick={closeFormModal}>
+                    Cancelar
+                  </button>
+                  <button type="submit" className="primary-btn">
+                    Agregar producto
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {adjustingProduct && (
         <section className="dashboard-recent">

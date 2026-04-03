@@ -27,6 +27,7 @@ const createInitialForm = () => ({
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
 const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
+const HIGH_DEBT_THRESHOLD = 250000
 
 const getPaymentStatus = (paid, balance) => {
   const safePaid = Number(paid) || 0
@@ -123,8 +124,8 @@ function ClientsPage({
   const [adjustmentDraft, setAdjustmentDraft] = useState({ orderId: '', amount: '', note: '' })
   const [observationDraft, setObservationDraft] = useState({ orderId: '', note: '' })
 
-  const safeClients = Array.isArray(clients) ? clients : []
-  const safeOrders = Array.isArray(orders) ? orders : []
+  const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
+  const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
 
   const statsMap = useMemo(() => {
     const map = safeClients.reduce((acc, client) => {
@@ -504,6 +505,7 @@ function ClientsPage({
                 {filteredClients.map((client) => {
                   const stats = statsMap[client.id]
                   const isExpanded = expandedClientId === client.id
+                  const hasHighDebt = Number(stats?.totalPendiente ?? 0) > HIGH_DEBT_THRESHOLD
 
                   return (
                     <Fragment key={client.id}>
@@ -519,7 +521,12 @@ function ClientsPage({
                         </td>
                         <td>{client.phone || '-'}</td>
                         <td>{client.email || '-'}</td>
-                        <td>{formatCurrency(stats?.totalPendiente ?? 0)}</td>
+                        <td>
+                          <div className="client-debt-cell">
+                            <span>{formatCurrency(stats?.totalPendiente ?? 0)}</span>
+                            {hasHighDebt && <span className="client-high-debt-badge">🔴 Cliente con deuda alta</span>}
+                          </div>
+                        </td>
                         <td>{stats?.lastOrderId || '-'}</td>
                         <td>
                           <div className="product-row-actions">
@@ -569,6 +576,7 @@ function ClientsPage({
                                   <div className="client-summary-card deuda">
                                     <p className="client-summary-label">Deuda</p>
                                     <p className="client-summary-value">{formatCurrency(stats?.totalPendiente ?? 0)}</p>
+                                    {hasHighDebt && <p className="client-summary-alert">🔴 Cliente con deuda alta</p>}
                                   </div>
                                   <div className="client-summary-card">
                                     <p className="client-summary-label">Pedidos activos</p>
@@ -605,7 +613,14 @@ function ClientsPage({
 
                                       return (
                                         <tr key={row.id}>
-                                          <td>{row.id}</td>
+                                          <td>
+                                            <a
+                                              href={`#/pedidos?open=${encodeURIComponent(row.id)}`}
+                                              className="quick-fill-btn"
+                                            >
+                                              {row.id}
+                                            </a>
+                                          </td>
                                           <td>{formatDate(row.createdAt)}</td>
                                           <td>{formatDate(row.deliveryDate)}</td>
                                           <td>{formatCurrency(row.total)}</td>

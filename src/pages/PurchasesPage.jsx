@@ -94,6 +94,7 @@ function PurchasesPage({
   onSaveSupplier,
   onDeleteSupplier,
 }) {
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false)
   const [supplierId, setSupplierId] = useState('')
     const [items, setItems] = useState([createPurchaseItem()])
     const [createdAt] = useState(() => {
@@ -112,9 +113,9 @@ function PurchasesPage({
   const [activeItemIndex, setActiveItemIndex] = useState(0)
   const productSearchInputRef = useRef(null)
 
-  const safeProducts = Array.isArray(products) ? products : []
-  const safePurchases = Array.isArray(purchases) ? purchases : []
-  const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
+  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
+  const safePurchases = useMemo(() => (Array.isArray(purchases) ? purchases : []), [purchases])
+  const safeSuppliers = useMemo(() => (Array.isArray(suppliers) ? suppliers : []), [suppliers])
   const sortedSuppliers = useMemo(
     () =>
       (Array.isArray(suppliers) ? suppliers : []).toSorted((a, b) =>
@@ -319,6 +320,20 @@ function PurchasesPage({
     setSupplierForm((prev) => ({ ...prev, [field]: value }))
   }
 
+  const resetPurchaseForm = () => {
+    setSupplierId('')
+    setItems([createPurchaseItem()])
+    setSelectedCategory('TODOS')
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
+    setActiveItemIndex(0)
+  }
+
+  const closePurchaseModal = () => {
+    setIsFormModalOpen(false)
+    resetPurchaseForm()
+  }
+
   const handleSubmit = (event) => {
     event.preventDefault()
 
@@ -334,8 +349,8 @@ function PurchasesPage({
         createdAt: new Date(`${createdAt}T00:00:00`).toISOString(),
       })
 
-    setSupplierId('')
-    setItems([createPurchaseItem()])
+    resetPurchaseForm()
+    setIsFormModalOpen(false)
   }
 
   const handleSaveSupplier = (event) => {
@@ -382,214 +397,18 @@ function PurchasesPage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2 className="section-title">Compras</h2>
-        <p>Registrá compras con proveedor obligatorio y reposición automática de stock.</p>
+        <div className="page-header-row">
+          <div>
+            <h2 className="section-title">Compras</h2>
+            <p>Registrá compras con proveedor obligatorio y reposición automática de stock.</p>
+          </div>
+          <button type="button" className="primary-btn" onClick={() => setIsFormModalOpen(true)}>
+            + Nueva compra
+          </button>
+        </div>
       </header>
 
-      <div className="products-grid">
-        <section className="card-block" style={purchaseFormContainerStyle}>
-          <div className="card-head">
-            <h3>Nueva compra</h3>
-          </div>
-
-          <form className="order-form" onSubmit={handleSubmit}>
-            <label>
-              Proveedor
-              <select
-                value={supplierId}
-                onChange={(event) => setSupplierId(event.target.value)}
-                required
-              >
-                <option value="">Seleccionar proveedor</option>
-                {sortedSuppliers.map((supplier) => (
-                  <option key={supplier.id} value={supplier.id}>
-                    {supplier.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="items-head">
-              <h4>Items de compra</h4>
-              <button type="button" className="secondary-btn" onClick={addItem}>
-                + Agregar ítem
-              </button>
-            </div>
-
-            <div className="orders-product-filters">
-              <label>
-                Categoría
-                <select
-                  value={normalizedSelectedCategory}
-                  onChange={(event) => {
-                    setSelectedCategory(event.target.value || 'TODOS')
-                    setHighlightedSuggestionIndex(0)
-                  }}
-                >
-                  {PRODUCT_FILTER_OPTIONS.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Buscar producto
-                <input
-                  ref={productSearchInputRef}
-                  type="text"
-                  value={productSearch}
-                  onChange={(event) => {
-                    setProductSearch(event.target.value)
-                    setHighlightedSuggestionIndex(0)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'ArrowDown') {
-                      if (autocompleteProducts.length === 0) return
-                      event.preventDefault()
-                      setHighlightedSuggestionIndex((prev) => Math.min(prev + 1, autocompleteProducts.length - 1))
-                      return
-                    }
-
-                    if (event.key === 'ArrowUp') {
-                      if (autocompleteProducts.length === 0) return
-                      event.preventDefault()
-                      setHighlightedSuggestionIndex((prev) => Math.max(prev - 1, 0))
-                      return
-                    }
-
-                    if (event.key !== 'Enter') return
-
-                    const activeSuggestion = autocompleteProducts[highlightedSuggestionIndex] ?? suggestedProduct
-                    if (!activeSuggestion?.id) return
-
-                    event.preventDefault()
-                    quickSelectProduct(activeSuggestion.id)
-                  }}
-                  placeholder="Buscar producto..."
-                />
-                {suggestedProduct && (
-                  <p className="payment-helper">
-                    Sugerido: <strong>{suggestedProduct.name}</strong> (Enter para autocompletar)
-                  </p>
-                )}
-                {autocompleteProducts.length > 0 && (
-                  <div className="orders-autocomplete-list" role="listbox" aria-label="Sugerencias de productos para compras">
-                    {autocompleteProducts.map((product, index) => (
-                      <button
-                        key={`purchase-suggestion-${product.id}`}
-                        type="button"
-                        className={`orders-autocomplete-item ${index === highlightedSuggestionIndex ? 'orders-autocomplete-item-active' : ''}`}
-                        onMouseEnter={() => setHighlightedSuggestionIndex(index)}
-                        onClick={() => quickSelectProduct(product.id)}
-                      >
-                        {product.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </label>
-
-              <div className="orders-most-used-wrap">
-                <p className="orders-most-used-title">⭐ Más usados</p>
-                <div className="orders-most-used-list">
-                  {topUsedProducts.length > 0 ? (
-                    topUsedProducts.map((product) => (
-                      <button
-                        key={product.id}
-                        type="button"
-                        className="quick-fill-btn"
-                        onClick={() => quickSelectProduct(product.id)}
-                      >
-                        {product.name} ({Number(product?.usageCount) || 0})
-                      </button>
-                    ))
-                  ) : (
-                    <span className="muted-label">Sin historial aún.</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="items-stack" style={purchaseItemsStackStyle}>
-              {items.map((item, index) => (
-                <div key={`purchase-item-${index}`} className="purchase-item-row">
-                  <select
-                    value={item.productId}
-                    onChange={(event) =>
-                      handleItemChange(index, 'productId', event.target.value)
-                    }
-                    onFocus={() => setActiveItemIndex(index)}
-                    required
-                  >
-                    <option value="">Seleccionar producto</option>
-                    {(item.productId && productById[item.productId]
-                      ? [productById[item.productId], ...filteredProducts.filter((product) => product.id !== item.productId)]
-                      : filteredProducts).map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name}
-                      </option>
-                    ))}
-                  </select>
-
-                  <input
-                    type="number"
-                    min="1"
-                    value={item.quantity}
-                    onChange={(event) =>
-                      handleItemChange(index, 'quantity', event.target.value)
-                    }
-                    onFocus={() => setActiveItemIndex(index)}
-                    placeholder="Cantidad"
-                  />
-
-                  <input
-                    type="number"
-                    min="0"
-                    value={item.unitCost}
-                    onChange={(event) =>
-                      handleItemChange(index, 'unitCost', event.target.value)
-                    }
-                    onFocus={() => setActiveItemIndex(index)}
-                    placeholder="Costo unitario"
-                  />
-
-                  <button
-                    type="button"
-                    className="danger-ghost-btn"
-                    onClick={() => removeItem(index)}
-                  >
-                    Quitar
-                  </button>
-
-                  <p className="payment-helper">
-                    Sugerencia operativa: usar cantidades en paquetes de 50/100.
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            <label>
-              Método de pago
-              <select value="Transferencia" disabled>
-                <option value="Transferencia">Transferencia</option>
-              </select>
-            </label>
-
-            <div style={purchaseActionAreaStyle}>
-              <div className="totals-box">
-                <p>
-                  <span>Total compra</span>
-                  <strong>{formatCurrency(purchaseTotal)}</strong>
-                </p>
-              </div>
-
-              <button type="submit" className="primary-btn">
-                Registrar compra
-              </button>
-            </div>
-          </form>
-        </section>
-
+      <div className="products-grid products-grid-single">
         <section className="card-block">
           <div className="card-head">
             <h3>Proveedores</h3>
@@ -688,6 +507,226 @@ function PurchasesPage({
           </div>
         </section>
       </div>
+
+      {isFormModalOpen && (
+        <div
+          className="modal-overlay order-form-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Nueva compra"
+          onKeyDown={(event) => { if (event.key === 'Escape') closePurchaseModal() }}
+        >
+          <div className="order-form-modal entity-form-modal">
+            <div className="order-form-modal-header">
+              <h3>Nueva compra</h3>
+              <button type="button" className="secondary-btn" onClick={closePurchaseModal}>Cerrar</button>
+            </div>
+            <div className="order-form-modal-body" style={purchaseFormContainerStyle}>
+              <form className="order-form" onSubmit={handleSubmit}>
+                <label>
+                  Proveedor
+                  <select
+                    value={supplierId}
+                    onChange={(event) => setSupplierId(event.target.value)}
+                    required
+                  >
+                    <option value="">Seleccionar proveedor</option>
+                    {sortedSuppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="items-head">
+                  <h4>Items de compra</h4>
+                  <button type="button" className="secondary-btn" onClick={addItem}>
+                    + Agregar ítem
+                  </button>
+                </div>
+
+                <div className="orders-product-filters">
+                  <label>
+                    Categoría
+                    <select
+                      value={normalizedSelectedCategory}
+                      onChange={(event) => {
+                        setSelectedCategory(event.target.value || 'TODOS')
+                        setHighlightedSuggestionIndex(0)
+                      }}
+                    >
+                      {PRODUCT_FILTER_OPTIONS.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Buscar producto
+                    <input
+                      ref={productSearchInputRef}
+                      type="text"
+                      value={productSearch}
+                      onChange={(event) => {
+                        setProductSearch(event.target.value)
+                        setHighlightedSuggestionIndex(0)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowDown') {
+                          if (autocompleteProducts.length === 0) return
+                          event.preventDefault()
+                          setHighlightedSuggestionIndex((prev) => Math.min(prev + 1, autocompleteProducts.length - 1))
+                          return
+                        }
+
+                        if (event.key === 'ArrowUp') {
+                          if (autocompleteProducts.length === 0) return
+                          event.preventDefault()
+                          setHighlightedSuggestionIndex((prev) => Math.max(prev - 1, 0))
+                          return
+                        }
+
+                        if (event.key !== 'Enter') return
+
+                        const activeSuggestion = autocompleteProducts[highlightedSuggestionIndex] ?? suggestedProduct
+                        if (!activeSuggestion?.id) return
+
+                        event.preventDefault()
+                        quickSelectProduct(activeSuggestion.id)
+                      }}
+                      placeholder="Buscar producto..."
+                    />
+                    {suggestedProduct && (
+                      <p className="payment-helper">
+                        Sugerido: <strong>{suggestedProduct.name}</strong> (Enter para autocompletar)
+                      </p>
+                    )}
+                    {autocompleteProducts.length > 0 && (
+                      <div className="orders-autocomplete-list" role="listbox" aria-label="Sugerencias de productos para compras">
+                        {autocompleteProducts.map((product, index) => (
+                          <button
+                            key={`purchase-suggestion-${product.id}`}
+                            type="button"
+                            className={`orders-autocomplete-item ${index === highlightedSuggestionIndex ? 'orders-autocomplete-item-active' : ''}`}
+                            onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                            onClick={() => quickSelectProduct(product.id)}
+                          >
+                            {product.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </label>
+
+                  <div className="orders-most-used-wrap">
+                    <p className="orders-most-used-title">⭐ Más usados</p>
+                    <div className="orders-most-used-list">
+                      {topUsedProducts.length > 0 ? (
+                        topUsedProducts.map((product) => (
+                          <button
+                            key={product.id}
+                            type="button"
+                            className="quick-fill-btn"
+                            onClick={() => quickSelectProduct(product.id)}
+                          >
+                            {product.name} ({Number(product?.usageCount) || 0})
+                          </button>
+                        ))
+                      ) : (
+                        <span className="muted-label">Sin historial aún.</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="items-stack" style={purchaseItemsStackStyle}>
+                  {items.map((item, index) => (
+                    <div key={`purchase-item-${index}`} className="purchase-item-row">
+                      <select
+                        value={item.productId}
+                        onChange={(event) =>
+                          handleItemChange(index, 'productId', event.target.value)
+                        }
+                        onFocus={() => setActiveItemIndex(index)}
+                        required
+                      >
+                        <option value="">Seleccionar producto</option>
+                        {(item.productId && productById[item.productId]
+                          ? [productById[item.productId], ...filteredProducts.filter((product) => product.id !== item.productId)]
+                          : filteredProducts).map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.quantity}
+                        onChange={(event) =>
+                          handleItemChange(index, 'quantity', event.target.value)
+                        }
+                        onFocus={() => setActiveItemIndex(index)}
+                        placeholder="Cantidad"
+                      />
+
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.unitCost}
+                        onChange={(event) =>
+                          handleItemChange(index, 'unitCost', event.target.value)
+                        }
+                        onFocus={() => setActiveItemIndex(index)}
+                        placeholder="Costo unitario"
+                      />
+
+                      <button
+                        type="button"
+                        className="danger-ghost-btn"
+                        onClick={() => removeItem(index)}
+                      >
+                        Quitar
+                      </button>
+
+                      <p className="payment-helper">
+                        Sugerencia operativa: usar cantidades en paquetes de 50/100.
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <label>
+                  Método de pago
+                  <select value="Transferencia" disabled>
+                    <option value="Transferencia">Transferencia</option>
+                  </select>
+                </label>
+
+                <div style={purchaseActionAreaStyle}>
+                  <div className="totals-box">
+                    <p>
+                      <span>Total compra</span>
+                      <strong>{formatCurrency(purchaseTotal)}</strong>
+                    </p>
+                  </div>
+
+                  <div className="order-form-actions">
+                    <button type="button" className="secondary-btn" onClick={closePurchaseModal}>
+                      Cancelar
+                    </button>
+                    <button type="submit" className="primary-btn">
+                      Registrar compra
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="dashboard-recent">
         <div className="card-head">

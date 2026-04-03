@@ -1,9 +1,10 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
 import { getQuoteEffectiveStatus } from '../state/useQuotesState'
 import { generateQuotePDF } from '../utils/pdf'
 
 const quoteStatuses = ['Pendiente', 'Aceptado', 'Rechazado', 'Vencido']
 const deliveryTypes = ['Retiro en fábrica', 'Envío']
+const PRODUCT_FILTER_OPTIONS = ['TODOS', 'CAJA', 'BOLSA', 'EMBALAJE', 'OTRO']
 
 const createDraftItem = () => ({
   sourceMode: 'existing',
@@ -16,6 +17,37 @@ const createDraftItem = () => ({
 const toPositiveNumber = (value) => {
   const parsed = Number(value)
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
+}
+
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const getSearchScore = (productName, query) => {
+  const normalizedName = normalizeSearchText(productName)
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) return 0
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  if (queryTokens.length === 0) return 0
+
+  const hasAllTokens = queryTokens.every((token) => normalizedName.includes(token))
+  if (!hasAllTokens) return -1
+
+  let score = 0
+  if (normalizedName === normalizedQuery) score += 1000
+  if (normalizedName.startsWith(normalizedQuery)) score += 500
+  if (normalizedName.includes(normalizedQuery)) score += 250
+
+  queryTokens.forEach((token) => {
+    if (normalizedName.includes(token)) score += 60
+    if (/^\d+$/.test(token) && normalizedName.includes(token)) score += 180
+  })
+
+  return score
 }
 
 const formatCurrency = (value) =>
@@ -61,9 +93,9 @@ function QuotesPage({
   onUpdateQuote,
   onConvertQuoteToOrder,
 }) {
-  const safeClients = Array.isArray(clients) ? clients : []
-  const safeProducts = Array.isArray(products) ? products : []
-  const safeQuotes = Array.isArray(quotes) ? quotes : []
+  const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
+  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
+  const safeQuotes = useMemo(() => (Array.isArray(quotes) ? quotes : []), [quotes])
   const sortedClients = useMemo(
     () =>
       (Array.isArray(clients) ? clients : []).toSorted((a, b) =>
@@ -97,7 +129,13 @@ function QuotesPage({
   const [shippingCost, setShippingCost] = useState(0)
   const [validUntil, setValidUntil] = useState(() => getDefaultValidUntil())
   const [submitMode, setSubmitMode] = useState('save')
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false)
+  const [selectedCategory, setSelectedCategory] = useState('TODOS')
+  const [productSearch, setProductSearch] = useState('')
+  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
+  const [activeItemIndex, setActiveItemIndex] = useState(0)
   const [listFilter, setListFilter] = useState('active')
+  const productSearchInputRef = useRef(null)
 
   const [expandedQuoteId, setExpandedQuoteId] = useState(null)
   const [quoteDrafts, setQuoteDrafts] = useState({})
@@ -117,6 +155,66 @@ function QuotesPage({
 
   const normalizedShippingCost = deliveryType === 'Envío' ? toPositiveNumber(shippingCost) : 0
   const total = subtotal + normalizedShippingCost
+
+  const normalizedSelectedCategory = useMemo(() => {
+    const value = String(selectedCategory ?? '').trim().toUpperCase()
+    if (!value || !PRODUCT_FILTER_OPTIONS.includes(value)) return 'TODOS'
+    return value
+  }, [selectedCategory])
+
+  const filteredProducts = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+
+    const byCategory = sortedProducts.filter((product) => {
+      const category = String(product?.category ?? '').trim().toUpperCase()
+      return normalizedSelectedCategory === 'TODOS' || category === normalizedSelectedCategory
+    })
+
+    if (!query) return byCategory
+
+    return byCategory
+      .map((product) => ({
+        product,
+        score: getSearchScore(String(product?.name ?? ''), query),
+      }))
+      .filter((row) => row.score >= 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+
+        const usageDiff = (Number(b.product?.usageCount) || 0) - (Number(a.product?.usageCount) || 0)
+        if (usageDiff !== 0) return usageDiff
+
+        return String(a.product?.name ?? '').localeCompare(String(b.product?.name ?? ''), 'es', { sensitivity: 'base' })
+      })
+      .map((row) => row.product)
+  }, [normalizedSelectedCategory, productSearch, sortedProducts])
+
+  const suggestedProduct = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+    if (!query) return null
+    return filteredProducts[0] ?? null
+  }, [filteredProducts, productSearch])
+
+  const autocompleteProducts = useMemo(() => {
+    const query = String(productSearch ?? '').trim()
+    if (!query) return []
+    return filteredProducts.slice(0, 8)
+  }, [filteredProducts, productSearch])
+
+  const topUsedProducts = useMemo(
+    () =>
+      [...safeProducts]
+        .sort((a, b) => {
+          const usageDiff = (Number(b?.usageCount) || 0) - (Number(a?.usageCount) || 0)
+          if (usageDiff !== 0) return usageDiff
+
+          const aLast = new Date(a?.lastUsedAt ?? 0).getTime()
+          const bLast = new Date(b?.lastUsedAt ?? 0).getTime()
+          return (Number.isNaN(bLast) ? 0 : bLast) - (Number.isNaN(aLast) ? 0 : aLast)
+        })
+        .slice(0, 5),
+    [safeProducts],
+  )
 
   const quotesWithDerivedStatus = useMemo(
     () =>
@@ -154,10 +252,12 @@ function QuotesPage({
         if (field === 'productId') {
           const nextProductId = String(value ?? '')
           const defaultDescription = String(productById[nextProductId]?.name ?? '').trim()
+          const suggestedUnitPrice = toPositiveNumber(productById[nextProductId]?.salePrice)
           return {
             ...item,
             productId: nextProductId,
             description: defaultDescription,
+            unitPrice: suggestedUnitPrice > 0 ? suggestedUnitPrice : item.unitPrice,
           }
         }
 
@@ -177,14 +277,69 @@ function QuotesPage({
   }
 
   const addDraftItem = () => {
-    setItems((prevItems) => [...prevItems, createDraftItem()])
+    setItems((prevItems) => {
+      const nextItems = [...prevItems, createDraftItem()]
+      setActiveItemIndex(nextItems.length - 1)
+      return nextItems
+    })
   }
 
   const removeDraftItem = (index) => {
     setItems((prevItems) => {
       if (prevItems.length === 1) return prevItems
+      setActiveItemIndex((current) => {
+        if (current > index) return current - 1
+        if (current === index) return Math.max(index - 1, 0)
+        return current
+      })
       return prevItems.filter((_, itemIndex) => itemIndex !== index)
     })
+  }
+
+  const quickSelectProduct = (productId) => {
+    const safeProductId = String(productId ?? '').trim()
+    if (!safeProductId) return
+
+    let selectedIndex = -1
+
+    setItems((prevItems) => {
+      const safeItems = Array.isArray(prevItems) ? prevItems : [createDraftItem()]
+      const activeIndexIsValid = activeItemIndex >= 0 && activeItemIndex < safeItems.length
+
+      const firstEmpty = safeItems.findIndex(
+        (item) => String(item?.sourceMode ?? 'existing') === 'existing' && !String(item?.productId ?? '').trim(),
+      )
+
+      const indexToUse = activeIndexIsValid
+        ? activeItemIndex
+        : firstEmpty >= 0
+          ? firstEmpty
+          : Math.max(safeItems.length - 1, 0)
+      selectedIndex = indexToUse
+
+      const selectedProduct = productById[safeProductId]
+      const suggestedUnitPrice = toPositiveNumber(selectedProduct?.salePrice)
+      const nextItems = safeItems.map((item, index) =>
+        index === indexToUse
+          ? {
+              ...item,
+              sourceMode: 'existing',
+              productId: safeProductId,
+              description: String(selectedProduct?.name ?? item.description ?? '').trim(),
+              unitPrice: suggestedUnitPrice > 0 ? suggestedUnitPrice : item.unitPrice,
+            }
+          : item,
+      )
+
+      return nextItems
+    })
+
+    if (selectedIndex >= 0) {
+      setActiveItemIndex(selectedIndex)
+    }
+
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
   }
 
   const normalizeQuoteItemsFromDraft = (draftItems) =>
@@ -239,6 +394,11 @@ function QuotesPage({
     setDeliveryType(deliveryTypes[0])
     setShippingCost(0)
     setValidUntil(getDefaultValidUntil())
+    setSelectedCategory('TODOS')
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
+    setActiveItemIndex(0)
+    setIsFormModalOpen(false)
 
     if (submitMode === 'pdf') {
       generateQuotePDF(created).catch(() => {
@@ -453,189 +613,37 @@ function QuotesPage({
     setExpandedQuoteId((current) => (current === quoteId ? null : quoteId))
   }
 
+  const closeFormModal = () => {
+    setIsFormModalOpen(false)
+    setSelectedClientId('')
+    setUseManualClient(false)
+    setManualClientName('')
+    setItems([createDraftItem()])
+    setProductionLeadTime('')
+    setDeliveryType(deliveryTypes[0])
+    setShippingCost(0)
+    setValidUntil(getDefaultValidUntil())
+    setSelectedCategory('TODOS')
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
+    setActiveItemIndex(0)
+  }
+
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>Presupuestos</h2>
-        <p>Creá y gestioná presupuestos sin impactar pedidos, stock ni finanzas.</p>
+        <div className="page-header-row">
+          <div>
+            <h2>Presupuestos</h2>
+            <p>Creá y gestioná presupuestos sin impactar pedidos, stock ni finanzas.</p>
+          </div>
+          <button type="button" className="primary-btn" onClick={() => setIsFormModalOpen(true)}>
+            + Nuevo presupuesto
+          </button>
+        </div>
       </header>
 
-      <div className="orders-grid">
-        <section className="card-block">
-          <div className="card-head">
-            <h3>Nuevo presupuesto</h3>
-          </div>
-
-          <form className="order-form" onSubmit={handleCreateQuote}>
-            <label>
-              Cliente existente (opcional)
-              <select
-                value={selectedClientId}
-                onChange={(event) => setSelectedClientId(event.target.value)}
-                disabled={useManualClient}
-              >
-                <option value="">Sin cliente seleccionado</option>
-                {sortedClients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <input
-                type="checkbox"
-                checked={useManualClient}
-                onChange={(event) => {
-                  const checked = event.target.checked
-                  setUseManualClient(checked)
-                  if (checked) setSelectedClientId('')
-                }}
-              />{' '}
-              Cargar cliente manual
-            </label>
-
-            {useManualClient && (
-              <label>
-                Cliente manual
-                <input
-                  type="text"
-                  value={manualClientName}
-                  onChange={(event) => setManualClientName(event.target.value)}
-                  placeholder="Nombre del cliente"
-                />
-              </label>
-            )}
-
-            <div className="items-head">
-              <h4>Ítems del presupuesto</h4>
-              <button type="button" className="secondary-btn" onClick={addDraftItem}>
-                + Agregar ítem
-              </button>
-            </div>
-
-            <div className="items-stack">
-              {items.map((item, index) => (
-                <div key={`quote-item-${index}`} className="quote-item-row">
-                  <select
-                    value={item.sourceMode}
-                    onChange={(event) => handleDraftItemChange(index, 'sourceMode', event.target.value)}
-                  >
-                    <option value="existing">Producto existente</option>
-                    <option value="manual">Producto manual</option>
-                  </select>
-
-                  {item.sourceMode === 'existing' ? (
-                    <select
-                      value={item.productId}
-                      onChange={(event) => handleDraftItemChange(index, 'productId', event.target.value)}
-                    >
-                      <option value="">Seleccionar producto</option>
-                      {sortedProducts.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={item.description}
-                      onChange={(event) => handleDraftItemChange(index, 'description', event.target.value)}
-                      placeholder="Descripción manual"
-                    />
-                  )}
-
-                  <input
-                    type="number"
-                    min="1"
-                    value={item.quantity}
-                    onChange={(event) => handleDraftItemChange(index, 'quantity', event.target.value)}
-                    placeholder="Cantidad"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    value={item.unitPrice}
-                    onChange={(event) => handleDraftItemChange(index, 'unitPrice', event.target.value)}
-                    placeholder="Precio unitario"
-                  />
-                  <button
-                    type="button"
-                    className="danger-ghost-btn"
-                    onClick={() => removeDraftItem(index)}
-                  >
-                    Quitar
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <label>
-              Tiempo estimado de producción
-              <input
-                type="text"
-                value={productionLeadTime}
-                onChange={(event) => setProductionLeadTime(event.target.value)}
-                placeholder="Ej: 7 a 10 días hábiles"
-              />
-            </label>
-
-            <label>
-              Tipo de entrega
-              <select value={deliveryType} onChange={(event) => setDeliveryType(event.target.value)}>
-                {deliveryTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {deliveryType === 'Envío' && (
-              <label>
-                Costo de envío
-                <input
-                  type="number"
-                  min="0"
-                  value={shippingCost}
-                  onChange={(event) => setShippingCost(event.target.value)}
-                />
-              </label>
-            )}
-
-            <label>
-              Fecha de validez
-              <input
-                type="date"
-                value={validUntil}
-                onChange={(event) => setValidUntil(event.target.value)}
-              />
-            </label>
-
-            <div className="totals-box">
-              <p>
-                <span>Subtotal</span>
-                <strong>{formatCurrency(subtotal)}</strong>
-              </p>
-              <p>
-                <span>Total</span>
-                <strong>{formatCurrency(total)}</strong>
-              </p>
-            </div>
-
-            <div className="product-actions">
-              <button type="submit" className="primary-btn" onClick={() => setSubmitMode('save')}>
-                Guardar presupuesto
-              </button>
-              <button type="submit" className="secondary-btn" onClick={() => setSubmitMode('pdf')}>
-                Guardar y generar PDF
-              </button>
-            </div>
-          </form>
-        </section>
-
+      <div className="products-grid products-grid-single">
         <section className="card-block">
           <div className="card-head">
             <h3>Listado de presupuestos</h3>
@@ -884,6 +892,302 @@ function QuotesPage({
           </div>
         </section>
       </div>
+
+      {isFormModalOpen && (
+        <div
+          className="modal-overlay order-form-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Nuevo presupuesto"
+          onKeyDown={(event) => { if (event.key === 'Escape') closeFormModal() }}
+        >
+          <div className="order-form-modal entity-form-modal">
+            <div className="order-form-modal-header">
+              <h3>Nuevo presupuesto</h3>
+              <button type="button" className="secondary-btn" onClick={closeFormModal}>Cerrar</button>
+            </div>
+            <div className="order-form-modal-body">
+              <form className="order-form" onSubmit={handleCreateQuote}>
+                <label>
+                  Cliente existente (opcional)
+                  <select
+                    value={selectedClientId}
+                    onChange={(event) => setSelectedClientId(event.target.value)}
+                    disabled={useManualClient}
+                  >
+                    <option value="">Sin cliente seleccionado</option>
+                    {sortedClients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={useManualClient}
+                    onChange={(event) => {
+                      const checked = event.target.checked
+                      setUseManualClient(checked)
+                      if (checked) setSelectedClientId('')
+                    }}
+                  />{' '}
+                  Cargar cliente manual
+                </label>
+
+                {useManualClient && (
+                  <label>
+                    Cliente manual
+                    <input
+                      type="text"
+                      value={manualClientName}
+                      onChange={(event) => setManualClientName(event.target.value)}
+                      placeholder="Nombre del cliente"
+                    />
+                  </label>
+                )}
+
+                <div className="items-head">
+                  <h4>Ítems del presupuesto</h4>
+                  <button type="button" className="secondary-btn" onClick={addDraftItem}>
+                    + Agregar ítem
+                  </button>
+                </div>
+
+                <div className="orders-product-filters">
+                  <label>
+                    Categoría
+                    <select
+                      value={normalizedSelectedCategory}
+                      onChange={(event) => {
+                        setSelectedCategory(event.target.value || 'TODOS')
+                        setHighlightedSuggestionIndex(0)
+                      }}
+                    >
+                      {PRODUCT_FILTER_OPTIONS.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Buscar producto
+                    <input
+                      ref={productSearchInputRef}
+                      type="text"
+                      value={productSearch}
+                      onChange={(event) => {
+                        setProductSearch(event.target.value)
+                        setHighlightedSuggestionIndex(0)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowDown') {
+                          if (autocompleteProducts.length === 0) return
+                          event.preventDefault()
+                          setHighlightedSuggestionIndex((prev) => Math.min(prev + 1, autocompleteProducts.length - 1))
+                          return
+                        }
+
+                        if (event.key === 'ArrowUp') {
+                          if (autocompleteProducts.length === 0) return
+                          event.preventDefault()
+                          setHighlightedSuggestionIndex((prev) => Math.max(prev - 1, 0))
+                          return
+                        }
+
+                        if (event.key !== 'Enter') return
+
+                        const activeSuggestion = autocompleteProducts[highlightedSuggestionIndex] ?? suggestedProduct
+                        if (!activeSuggestion?.id) return
+
+                        event.preventDefault()
+                        quickSelectProduct(activeSuggestion.id)
+                      }}
+                      placeholder="Buscar producto..."
+                    />
+                    {suggestedProduct && (
+                      <p className="payment-helper">
+                        Sugerido: <strong>{suggestedProduct.name}</strong> (Enter para autocompletar)
+                      </p>
+                    )}
+                    {autocompleteProducts.length > 0 && (
+                      <div className="orders-autocomplete-list" role="listbox" aria-label="Sugerencias de productos para presupuesto">
+                        {autocompleteProducts.map((product, index) => (
+                          <button
+                            key={`quote-suggestion-${product.id}`}
+                            type="button"
+                            className={`orders-autocomplete-item ${index === highlightedSuggestionIndex ? 'orders-autocomplete-item-active' : ''}`}
+                            onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                            onClick={() => quickSelectProduct(product.id)}
+                          >
+                            {product.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </label>
+
+                  <div className="orders-most-used-wrap">
+                    <p className="orders-most-used-title">⭐ Más usados</p>
+                    <div className="orders-most-used-list">
+                      {topUsedProducts.length > 0 ? (
+                        topUsedProducts.map((product) => (
+                          <button
+                            key={product.id}
+                            type="button"
+                            className="quick-fill-btn"
+                            onClick={() => quickSelectProduct(product.id)}
+                          >
+                            {product.name} ({Number(product?.usageCount) || 0})
+                          </button>
+                        ))
+                      ) : (
+                        <span className="muted-label">Sin historial aún.</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="items-stack">
+                  {items.map((item, index) => (
+                    <div key={`quote-item-${index}`} className="quote-item-row">
+                      <select
+                        value={item.sourceMode}
+                        onChange={(event) => handleDraftItemChange(index, 'sourceMode', event.target.value)}
+                        onFocus={() => setActiveItemIndex(index)}
+                      >
+                        <option value="existing">Producto existente</option>
+                        <option value="manual">Producto manual</option>
+                      </select>
+
+                      {item.sourceMode === 'existing' ? (
+                        <select
+                          value={item.productId}
+                          onChange={(event) => handleDraftItemChange(index, 'productId', event.target.value)}
+                          onFocus={() => setActiveItemIndex(index)}
+                        >
+                          <option value="">Seleccionar producto</option>
+                          {(item.productId && productById[item.productId]
+                            ? [productById[item.productId], ...filteredProducts.filter((product) => product.id !== item.productId)]
+                            : filteredProducts).map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={item.description}
+                          onChange={(event) => handleDraftItemChange(index, 'description', event.target.value)}
+                          onFocus={() => setActiveItemIndex(index)}
+                          placeholder="Descripción manual"
+                        />
+                      )}
+
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.quantity}
+                        onChange={(event) => handleDraftItemChange(index, 'quantity', event.target.value)}
+                        onFocus={() => setActiveItemIndex(index)}
+                        placeholder="Cantidad"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.unitPrice}
+                        onChange={(event) => handleDraftItemChange(index, 'unitPrice', event.target.value)}
+                        onFocus={() => setActiveItemIndex(index)}
+                        placeholder="Precio unitario"
+                      />
+                      <button
+                        type="button"
+                        className="danger-ghost-btn"
+                        onClick={() => removeDraftItem(index)}
+                      >
+                        Quitar
+                      </button>
+                      {item.sourceMode === 'existing' && item.productId && (
+                        <p className="payment-helper">
+                          Precio sugerido: <strong>{formatCurrency(productById[item.productId]?.salePrice || 0)}</strong>
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <label>
+                  Tiempo estimado de producción
+                  <input
+                    type="text"
+                    value={productionLeadTime}
+                    onChange={(event) => setProductionLeadTime(event.target.value)}
+                    placeholder="Ej: 7 a 10 días hábiles"
+                  />
+                </label>
+
+                <label>
+                  Tipo de entrega
+                  <select value={deliveryType} onChange={(event) => setDeliveryType(event.target.value)}>
+                    {deliveryTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {deliveryType === 'Envío' && (
+                  <label>
+                    Costo de envío
+                    <input
+                      type="number"
+                      min="0"
+                      value={shippingCost}
+                      onChange={(event) => setShippingCost(event.target.value)}
+                    />
+                  </label>
+                )}
+
+                <label>
+                  Fecha de validez
+                  <input
+                    type="date"
+                    value={validUntil}
+                    onChange={(event) => setValidUntil(event.target.value)}
+                  />
+                </label>
+
+                <div className="totals-box">
+                  <p>
+                    <span>Subtotal</span>
+                    <strong>{formatCurrency(subtotal)}</strong>
+                  </p>
+                  <p>
+                    <span>Total</span>
+                    <strong>{formatCurrency(total)}</strong>
+                  </p>
+                </div>
+
+                <div className="order-form-actions">
+                  <button type="button" className="secondary-btn" onClick={closeFormModal}>
+                    Cancelar
+                  </button>
+                  <button type="submit" className="primary-btn" onClick={() => setSubmitMode('save')}>
+                    Guardar presupuesto
+                  </button>
+                  <button type="submit" className="secondary-btn" onClick={() => setSubmitMode('pdf')}>
+                    Guardar y generar PDF
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {convertModalQuote && (
         <div className="modal-overlay">

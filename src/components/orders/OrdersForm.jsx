@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { formatOrderId } from '../../utils/orders'
+import { createDebouncedStorageWriter } from '../../utils/storageDebounce'
 
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleOrderStatuses = ['Pendiente', 'Lista']
-const ORDER_DRAFT_STORAGE_KEY = 'packya_draft_order'
+const ORDER_DRAFT_STORAGE_KEY = 'packya_order_draft'
+const LEGACY_ORDER_DRAFT_STORAGE_KEY = 'packya_draft_order'
 const PRODUCT_FILTER_OPTIONS = ['TODOS', 'CAJA', 'BOLSA', 'EMBALAJE', 'OTRO']
 
 const createEmptyItem = () => ({
@@ -40,23 +43,15 @@ const readOrderDraftFromSessionStorage = () => {
   if (typeof window === 'undefined' || !window.sessionStorage) return null
 
   try {
-    const raw = window.sessionStorage.getItem(ORDER_DRAFT_STORAGE_KEY)
+    const raw =
+      window.sessionStorage.getItem(ORDER_DRAFT_STORAGE_KEY) ||
+      window.sessionStorage.getItem(LEGACY_ORDER_DRAFT_STORAGE_KEY)
     if (!raw) return null
 
     const parsed = JSON.parse(raw)
     return parsed && typeof parsed === 'object' ? parsed : null
   } catch {
     return null
-  }
-}
-
-const persistOrderDraftToSessionStorage = (draft) => {
-  if (typeof window === 'undefined' || !window.sessionStorage) return
-
-  try {
-    window.sessionStorage.setItem(ORDER_DRAFT_STORAGE_KEY, JSON.stringify(draft))
-  } catch {
-    void 0
   }
 }
 
@@ -122,9 +117,12 @@ function OrdersForm({
   onCreate,
   onCreateClient,
   onProductUsed,
+  onSuccess,
+  onCancel,
+  isModal,
 }) {
-  const safeProducts = Array.isArray(products) ? products : []
-  const safeClients = Array.isArray(clients) ? clients : []
+  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
+  const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
   const sortedClients = useMemo(
     () =>
       (Array.isArray(clients) ? clients : []).toSorted((a, b) =>
@@ -141,9 +139,26 @@ function OrdersForm({
   )
   const safeStockByProductId = stockByProductId ?? {}
   const initialDraft = useMemo(() => readOrderDraftFromSessionStorage(), [])
+  const hasPromptedDraftRestoreRef = useRef(false)
   const shouldSkipDraftPersistRef = useRef(false)
   const productSearchInputRef = useRef(null)
+  const clientSelectRef = useRef(null)
+  const sampleClientNameInputRef = useRef(null)
   const itemProductRefs = useRef({})
+  const draftStorageWriter = useMemo(
+    () => createDebouncedStorageWriter({
+      key: ORDER_DRAFT_STORAGE_KEY,
+      storageGetter: () => (typeof window !== 'undefined' ? window.sessionStorage : null),
+      label: 'order-draft',
+    }),
+    [],
+  )
+
+  const clearOrderDraftNow = useCallback(() => {
+    draftStorageWriter.cancel()
+    clearOrderDraftFromSessionStorage()
+  }, [draftStorageWriter])
+
   const productById = useMemo(
     () =>
       safeProducts.reduce((acc, product) => {
@@ -203,6 +218,12 @@ function OrdersForm({
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
   const [activeItemIndex, setActiveItemIndex] = useState(0)
   const [confirmedItems, setConfirmedItems] = useState({})
+  const [, setInputFallbackTick] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [submitAttempted, setSubmitAttempted] = useState(false)
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const itemsSectionRef = useRef(null)
 
   const normalizedSelectedCategory = useMemo(() => {
     const value = String(selectedCategory ?? '').trim().toUpperCase()
@@ -270,7 +291,7 @@ function OrdersForm({
       return
     }
 
-    persistOrderDraftToSessionStorage({
+    draftStorageWriter.schedule({
       clientId,
       status,
       deliveryDate,
@@ -304,7 +325,26 @@ function OrdersForm({
     sampleClientPhone,
     isQuickCreateClientOpen,
     quickClientForm,
+    draftStorageWriter,
   ])
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      draftStorageWriter.flush()
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload)
+      }
+      draftStorageWriter.flush()
+      draftStorageWriter.cancel()
+    }
+  }, [draftStorageWriter])
 
   useEffect(() => {
     if (!productSearchInputRef.current) return
@@ -317,7 +357,89 @@ function OrdersForm({
     element.focus()
   }, [activeItemIndex, items.length])
 
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined
+    if (typeof document === 'undefined') return undefined
+
+    const handleFocusIn = (event) => {
+      const target = event.target
+      const isInputLike =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+
+      if (!isInputLike) return
+
+      const isBlocked =
+        Boolean(target.disabled) ||
+        (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+          ? Boolean(target.readOnly)
+          : false)
+
+      if (!isBlocked) return
+
+      // Fallback: forzar un rerender controlado cuando detectamos un campo bloqueado.
+      setInputFallbackTick((prev) => prev + 1)
+    }
+
+    document.addEventListener('focusin', handleFocusIn)
+    return () => document.removeEventListener('focusin', handleFocusIn)
+  }, [])
+
+  useEffect(() => {
+    if (!isModal) return
+    const timer = setTimeout(() => {
+      clientSelectRef.current?.focus()
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [isModal])
+
+  const resetForm = () => {
+    const today = getTodayDateInput()
+    setClientId('')
+    setStatus(orderStatuses[0])
+    setDeliveryDate('')
+    setFinancialNote('')
+    setDiscount(0)
+    setItems([createEmptyItem()])
+    setCreatedAt(today)
+    setProductionDate(today)
+    setIsSample(false)
+    setSampleClientName('')
+    setSampleClientPhone('')
+    setConfirmedItems({})
+    setActiveItemIndex(0)
+    setIsQuickCreateClientOpen(false)
+    setQuickClientForm(createInitialQuickClientForm())
+    setQuickClientError('')
+    setProductSearch('')
+    setHighlightedSuggestionIndex(0)
+  }
+
+  useEffect(() => {
+    if (hasPromptedDraftRestoreRef.current) return
+    hasPromptedDraftRestoreRef.current = true
+    if (!isModal || !initialDraft) return
+
+    const shouldRestore = window.confirm('Se encontró un borrador de pedido. ¿Querés restaurarlo?')
+    if (shouldRestore) return
+
+    shouldSkipDraftPersistRef.current = true
+    clearOrderDraftNow()
+    setTimeout(() => {
+      resetForm()
+    }, 0)
+  }, [initialDraft, isModal, clearOrderDraftNow])
+
   const availableStatuses = isSample ? sampleOrderStatuses : orderStatuses
+
+  const isDirty = useMemo(
+    () =>
+      (isSample ? String(sampleClientName ?? '').trim().length > 0 : Boolean(clientId)) ||
+      Boolean(deliveryDate) ||
+      items.some((item) => Boolean(item.productId)),
+    [isSample, sampleClientName, clientId, deliveryDate, items],
+  )
 
   const subtotal = useMemo(
     () =>
@@ -381,6 +503,17 @@ function OrdersForm({
 
   const addItem = () => {
     setItems((prevItems) => {
+      const existingEmptyIndex = prevItems.findIndex(
+        (item, index) =>
+          !confirmedItems[index] &&
+          !String(item?.productId ?? '').trim(),
+      )
+
+      if (existingEmptyIndex >= 0) {
+        setActiveItemIndex(existingEmptyIndex)
+        return prevItems
+      }
+
       const nextItems = [...prevItems, createEmptyItem()]
       setActiveItemIndex(nextItems.length - 1)
       return nextItems
@@ -538,8 +671,20 @@ function OrdersForm({
     }
   }
 
-  const handleSubmit = (event) => {
+  const handleCancelClick = () => {
+    if (isDirty) {
+      setShowCancelConfirm(true)
+    } else {
+      onCancel?.()
+    }
+  }
+
+  const handleSubmit = async (event) => {
     event.preventDefault()
+    if (saving) return
+
+    setSubmitAttempted(true)
+    setSaveError('')
 
     const sanitizedItems = items
       .filter((item) => item.productId)
@@ -554,9 +699,24 @@ function OrdersForm({
     const selectedClient = safeClients.find((client) => client.id === clientId) || null
     const normalizedSampleClientName = String(sampleClientName ?? '').trim()
     const normalizedSampleClientPhone = String(sampleClientPhone ?? '').trim()
-    if (!isSample && !selectedClient) return
-    if (isSample && !normalizedSampleClientName) return
-    if (!deliveryDate || sanitizedItems.length === 0) return
+
+    const hasClientError = !isSample && !selectedClient
+    const hasSampleNameError = isSample && !normalizedSampleClientName
+    const hasItemsError = sanitizedItems.length === 0
+
+    if (hasClientError || hasSampleNameError || !deliveryDate || hasItemsError) {
+      if (hasClientError || hasSampleNameError) {
+        const errorInput = hasSampleNameError
+          ? sampleClientNameInputRef.current
+          : clientSelectRef.current
+        errorInput?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        errorInput?.focus()
+      } else if (hasItemsError) {
+        itemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        itemProductRefs.current[0]?.focus()
+      }
+      return
+    }
 
     const payload = {
       id: orderId,
@@ -582,28 +742,37 @@ function OrdersForm({
       createdAt: new Date(`${createdAt}T00:00:00`).toISOString(),
     }
 
-    onCreate(payload)
-    shouldSkipDraftPersistRef.current = true
-    clearOrderDraftFromSessionStorage()
+    try {
+      setSaving(true)
+      await Promise.resolve(onCreate?.(payload))
 
-    setClientId('')
-    setStatus(orderStatuses[0])
-    setDeliveryDate('')
-    setFinancialNote('')
-    setDiscount(0)
-    setItems([createEmptyItem()])
-    setProductionDate(createdAt)
-    setIsSample(false)
-    setSampleClientName('')
-    setSampleClientPhone('')
+      shouldSkipDraftPersistRef.current = true
+      clearOrderDraftNow()
+      resetForm()
+      onSuccess?.('Pedido guardado correctamente')
+      onCancel?.()
+      setSubmitAttempted(false)
+      setShowCancelConfirm(false)
+    } catch (error) {
+      console.error(error)
+      setSaveError('No se pudo guardar el pedido. Reintentá en unos segundos.')
+    } finally {
+      setSaving(false)
+    }
   }
 
+  const clientError = submitAttempted && !isSample && !clientId
+  const sampleNameError = submitAttempted && isSample && !String(sampleClientName ?? '').trim()
+  const itemsError = submitAttempted && items.filter((item) => item.productId).length === 0
+
   return (
-    <section className="card-block">
-      <div className="card-head">
-        <h3>Nuevo pedido</h3>
-        <span className="muted-label">{orderId}</span>
-      </div>
+    <section className={isModal ? undefined : 'card-block'}>
+      {!isModal && (
+        <div className="card-head">
+          <h3>Nuevo pedido</h3>
+          <span className="muted-label">{formatOrderId(orderId)}</span>
+        </div>
+      )}
 
       <form className="order-form" onSubmit={handleSubmit}>
         <label>
@@ -624,11 +793,13 @@ function OrdersForm({
             <label>
               Nombre (muestra)
               <input
+                ref={sampleClientNameInputRef}
                 type="text"
                 value={sampleClientName}
                 onChange={(event) => setSampleClientName(event.target.value)}
                 placeholder="Nombre libre"
                 required
+                style={sampleNameError ? { border: '1px solid #c62828' } : undefined}
               />
             </label>
 
@@ -647,9 +818,11 @@ function OrdersForm({
             Cliente
             <div className="inline-field-row">
               <select
+                ref={clientSelectRef}
                 value={clientId}
                 onChange={(event) => setClientId(event.target.value)}
                 required
+                style={clientError ? { border: '1px solid #c62828' } : undefined}
               >
                 <option value="">Seleccionar cliente</option>
                 {sortedClients.map((client) => (
@@ -754,12 +927,19 @@ function OrdersForm({
           />
         </label>
 
-        <div className="items-head">
+        <div
+          ref={itemsSectionRef}
+          className="items-head"
+          style={itemsError ? { border: '1px solid #c62828', borderRadius: '8px', padding: '0.45rem' } : undefined}
+        >
           <h4>Productos del pedido</h4>
           <button type="button" className="secondary-btn" onClick={addItem}>
             + Agregar ítem
           </button>
         </div>
+        {itemsError && (
+          <p className="payment-error">Agregá al menos un producto para continuar.</p>
+        )}
 
         <div className="orders-product-filters">
           <label>
@@ -857,13 +1037,32 @@ function OrdersForm({
 
         <div className="items-stack">
           {items.map((item, index) => (
-            <div key={`item-${index}`} className="item-row">
+            <div
+              key={`item-${index}`}
+              className={`item-row ${
+                !isItemConfirmed(index) &&
+                !String(item?.productId ?? '').trim() &&
+                index === items.length - 1 &&
+                items.some((candidate, candidateIndex) =>
+                  candidateIndex !== index && String(candidate?.productId ?? '').trim(),
+                )
+                  ? 'item-row-optional'
+                  : ''
+              }`}
+            >
               {(() => {
                 const itemIsConfirmed = isItemConfirmed(index)
                 const selectedProduct = productById[item.productId]
                 const itemOptions = item.productId && selectedProduct
                   ? [selectedProduct, ...filteredProducts.filter((product) => product.id !== item.productId)]
                   : filteredProducts
+                const isOptionalEmptyRow =
+                  !itemIsConfirmed &&
+                  !String(item?.productId ?? '').trim() &&
+                  index === items.length - 1 &&
+                  items.some((candidate, candidateIndex) =>
+                    candidateIndex !== index && String(candidate?.productId ?? '').trim(),
+                  )
 
                 return (
                   <>
@@ -876,7 +1075,6 @@ function OrdersForm({
                   handleItemChange(index, 'productId', event.target.value)
                 }
                 onFocus={() => setActiveItemIndex(index)}
-                required
                 disabled={itemIsConfirmed}
               >
                 <option value="">Seleccionar producto</option>
@@ -977,6 +1175,10 @@ function OrdersForm({
               {!item.productId && filteredProducts.length === 0 && (
                 <p className="payment-helper">No hay productos para ese filtro. Probá con categoría TODOS.</p>
               )}
+
+              {isOptionalEmptyRow && (
+                <p className="item-row-optional-note">Fila opcional para seguir cargando más productos.</p>
+              )}
                   </>
                 )
               })()}
@@ -1019,9 +1221,40 @@ function OrdersForm({
           </p>
         </div>
 
-        <button type="submit" className="primary-btn">
-          Guardar pedido
-        </button>
+        {showCancelConfirm && (
+          <div className="order-form-cancel-confirm">
+            <p>Tenés cambios sin guardar. ¿Querés salir igual?</p>
+            <div className="order-form-cancel-confirm-actions">
+              <button
+                type="button"
+                className="danger-ghost-btn"
+                onClick={() => { clearOrderDraftNow(); onCancel?.() }}
+              >
+                ✔ Salir
+              </button>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => setShowCancelConfirm(false)}
+              >
+                ✖ Volver
+              </button>
+            </div>
+          </div>
+        )}
+
+        {saveError && <p className="payment-error">{saveError}</p>}
+
+        <div className="order-form-actions">
+          {onCancel && (
+            <button type="button" className="secondary-btn" onClick={handleCancelClick}>
+              ✖ Cancelar
+            </button>
+          )}
+          <button type="submit" className="primary-btn" disabled={saving}>
+            {saving ? 'Guardando...' : 'Guardar pedido'}
+          </button>
+        </div>
       </form>
     </section>
   )

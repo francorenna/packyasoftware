@@ -46,6 +46,7 @@ function ManualPurchaseListsPage({
   onConvertToPurchase,
   onSaveSupplier,
 }) {
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false)
   const [editingListId, setEditingListId] = useState('')
   const [supplierId, setSupplierId] = useState('')
   const [supplierName, setSupplierName] = useState('')
@@ -106,6 +107,18 @@ function ManualPurchaseListsPage({
     setSupplierName('')
     setItems([createEmptyItem()])
     setFormError('')
+    setIsQuickSupplierOpen(false)
+    setSupplierForm(createSupplierForm())
+  }
+
+  const openCreateModal = () => {
+    resetForm()
+    setIsFormModalOpen(true)
+  }
+
+  const closeFormModal = () => {
+    resetForm()
+    setIsFormModalOpen(false)
   }
 
   const syncItemLineTotal = (nextItem) => {
@@ -213,9 +226,11 @@ function ManualPurchaseListsPage({
     }
 
     resetForm()
+    setIsFormModalOpen(false)
   }
 
   const handleEditList = (list) => {
+    setIsFormModalOpen(true)
     setEditingListId(String(list.id))
     setSupplierId(String(list.supplierId ?? ''))
     setSupplierName(String(list.supplierName ?? '').trim())
@@ -263,183 +278,18 @@ function ManualPurchaseListsPage({
   return (
     <section className="page-section">
       <header className="page-header">
-        <h2>🛒 Listas de Compra</h2>
-        <p>Generá listas internas y convertí a compra real cuando corresponda.</p>
+        <div className="page-header-row">
+          <div>
+            <h2>🛒 Listas de Compra</h2>
+            <p>Generá listas internas y convertí a compra real cuando corresponda.</p>
+          </div>
+          <button type="button" className="primary-btn" onClick={openCreateModal}>
+            + Nueva lista
+          </button>
+        </div>
       </header>
 
-      <div className="products-grid manual-purchase-grid">
-        <section className="card-block">
-          <div className="card-head">
-            <h3>{editingListId ? 'Editar lista' : 'Nueva lista'}</h3>
-          </div>
-
-          <div className="order-form">
-            <label>
-              Proveedor
-              <div className="inline-field-row manual-supplier-row">
-                <select
-                  value={supplierId}
-                  onChange={(event) => {
-                    const nextSupplierId = event.target.value
-                    setSupplierId(nextSupplierId)
-                    setSupplierName(String(supplierById[nextSupplierId]?.name ?? '').trim())
-                  }}
-                >
-                  <option value="">Seleccionar proveedor</option>
-                  {sortedSuppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>
-                      {supplier.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="secondary-btn"
-                  onClick={() => setIsQuickSupplierOpen((prev) => !prev)}
-                >
-                  {isQuickSupplierOpen ? 'Cerrar' : '+ Nuevo proveedor'}
-                </button>
-              </div>
-            </label>
-
-            {isQuickSupplierOpen && (
-              <>
-                <label>
-                  Nombre proveedor
-                  <input
-                    type="text"
-                    value={supplierForm.name}
-                    onChange={(event) =>
-                      setSupplierForm((prev) => ({ ...prev, name: event.target.value }))
-                    }
-                    placeholder="Nombre"
-                  />
-                </label>
-                <label>
-                  Teléfono
-                  <input
-                    type="text"
-                    value={supplierForm.phone}
-                    onChange={(event) =>
-                      setSupplierForm((prev) => ({ ...prev, phone: event.target.value }))
-                    }
-                    placeholder="Teléfono"
-                  />
-                </label>
-                <label>
-                  Notas
-                  <input
-                    type="text"
-                    value={supplierForm.notes}
-                    onChange={(event) =>
-                      setSupplierForm((prev) => ({ ...prev, notes: event.target.value }))
-                    }
-                    placeholder="Notas"
-                  />
-                </label>
-                <button type="button" className="secondary-btn" onClick={handleSaveQuickSupplier}>
-                  Guardar proveedor
-                </button>
-              </>
-            )}
-
-            <div className="items-head">
-              <h4>Ítems de lista</h4>
-              <button type="button" className="secondary-btn" onClick={addItem}>
-                + Agregar ítem
-              </button>
-            </div>
-
-            <div className="items-stack manual-list-items-stack">
-              {items.map((item, index) => (
-                <div key={`manual-list-item-${index}`} className="manual-list-item-row">
-                  <label className="manual-list-item-field">
-                    <span className="manual-list-item-label">Producto</span>
-                    <select
-                      value={item.productId}
-                      onChange={(event) => handleItemChange(index, 'productId', event.target.value)}
-                    >
-                      <option value="">Producto manual</option>
-                      {sortedProducts.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="manual-list-item-field">
-                    <span className="manual-list-item-label">Nombre</span>
-                    <input
-                      type="text"
-                      value={item.productName}
-                      onChange={(event) => handleItemChange(index, 'productName', event.target.value)}
-                      placeholder="Nombre del producto"
-                    />
-                  </label>
-
-                  <label className="manual-list-item-field">
-                    <span className="manual-list-item-label">Cantidad</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={item.quantity}
-                      onChange={(event) => handleItemChange(index, 'quantity', event.target.value)}
-                      placeholder="Cantidad"
-                    />
-                  </label>
-
-                  <label className="manual-list-item-field">
-                    <span className="manual-list-item-label">Costo ref.</span>
-                    <input
-                      type="number"
-                      min="0"
-                      value={item.referenceCost}
-                      onChange={(event) => handleItemChange(index, 'referenceCost', event.target.value)}
-                      placeholder="Costo ref."
-                    />
-                  </label>
-
-                  <div className="manual-list-item-total">
-                    <span className="manual-list-item-label">Subtotal</span>
-                    <strong>{formatCurrency(item.lineTotal)}</strong>
-                  </div>
-
-                  <div className="manual-list-item-action">
-                    <button
-                      type="button"
-                      className="danger-ghost-btn"
-                      onClick={() => removeItem(index)}
-                    >
-                      Quitar
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="totals-box">
-              <p className="total-line">
-                <span>Total estimado interno</span>
-                <strong>{formatCurrency(estimatedTotal)}</strong>
-              </p>
-            </div>
-
-            {formError && <p className="payment-error">{formError}</p>}
-
-            <div className="product-actions">
-              {editingListId && (
-                <button type="button" className="secondary-btn" onClick={resetForm}>
-                  Cancelar edición
-                </button>
-              )}
-              <button type="button" className="primary-btn" onClick={handleSaveList}>
-                Guardar como Pendiente
-              </button>
-            </div>
-          </div>
-        </section>
-
+      <div className="products-grid manual-purchase-grid manual-purchase-grid-single">
         <section className="card-block">
           <div className="card-head">
             <h3>Listas registradas</h3>
@@ -528,6 +378,188 @@ function ManualPurchaseListsPage({
           </div>
         </section>
       </div>
+
+      {isFormModalOpen && (
+        <div
+          className="modal-overlay order-form-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={editingListId ? 'Editar lista de compra' : 'Nueva lista de compra'}
+          onKeyDown={(event) => { if (event.key === 'Escape') closeFormModal() }}
+        >
+          <div className="order-form-modal entity-form-modal">
+            <div className="order-form-modal-header">
+              <h3>{editingListId ? 'Editar lista' : 'Nueva lista'}</h3>
+              <button type="button" className="secondary-btn" onClick={closeFormModal}>Cerrar</button>
+            </div>
+            <div className="order-form-modal-body">
+              <div className="order-form">
+                <label>
+                  Proveedor
+                  <div className="inline-field-row manual-supplier-row">
+                    <select
+                      value={supplierId}
+                      onChange={(event) => {
+                        const nextSupplierId = event.target.value
+                        setSupplierId(nextSupplierId)
+                        setSupplierName(String(supplierById[nextSupplierId]?.name ?? '').trim())
+                      }}
+                    >
+                      <option value="">Seleccionar proveedor</option>
+                      {sortedSuppliers.map((supplier) => (
+                        <option key={supplier.id} value={supplier.id}>
+                          {supplier.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => setIsQuickSupplierOpen((prev) => !prev)}
+                    >
+                      {isQuickSupplierOpen ? 'Cerrar' : '+ Nuevo proveedor'}
+                    </button>
+                  </div>
+                </label>
+
+                {isQuickSupplierOpen && (
+                  <>
+                    <label>
+                      Nombre proveedor
+                      <input
+                        type="text"
+                        value={supplierForm.name}
+                        onChange={(event) =>
+                          setSupplierForm((prev) => ({ ...prev, name: event.target.value }))
+                        }
+                        placeholder="Nombre"
+                      />
+                    </label>
+                    <label>
+                      Teléfono
+                      <input
+                        type="text"
+                        value={supplierForm.phone}
+                        onChange={(event) =>
+                          setSupplierForm((prev) => ({ ...prev, phone: event.target.value }))
+                        }
+                        placeholder="Teléfono"
+                      />
+                    </label>
+                    <label>
+                      Notas
+                      <input
+                        type="text"
+                        value={supplierForm.notes}
+                        onChange={(event) =>
+                          setSupplierForm((prev) => ({ ...prev, notes: event.target.value }))
+                        }
+                        placeholder="Notas"
+                      />
+                    </label>
+                    <button type="button" className="secondary-btn" onClick={handleSaveQuickSupplier}>
+                      Guardar proveedor
+                    </button>
+                  </>
+                )}
+
+                <div className="items-head">
+                  <h4>Ítems de lista</h4>
+                  <button type="button" className="secondary-btn" onClick={addItem}>
+                    + Agregar ítem
+                  </button>
+                </div>
+
+                <div className="items-stack manual-list-items-stack">
+                  {items.map((item, index) => (
+                    <div key={`manual-list-item-${index}`} className="manual-list-item-row">
+                      <label className="manual-list-item-field">
+                        <span className="manual-list-item-label">Producto</span>
+                        <select
+                          value={item.productId}
+                          onChange={(event) => handleItemChange(index, 'productId', event.target.value)}
+                        >
+                          <option value="">Producto manual</option>
+                          {sortedProducts.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="manual-list-item-field">
+                        <span className="manual-list-item-label">Nombre</span>
+                        <input
+                          type="text"
+                          value={item.productName}
+                          onChange={(event) => handleItemChange(index, 'productName', event.target.value)}
+                          placeholder="Nombre del producto"
+                        />
+                      </label>
+
+                      <label className="manual-list-item-field">
+                        <span className="manual-list-item-label">Cantidad</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.quantity}
+                          onChange={(event) => handleItemChange(index, 'quantity', event.target.value)}
+                          placeholder="Cantidad"
+                        />
+                      </label>
+
+                      <label className="manual-list-item-field">
+                        <span className="manual-list-item-label">Costo ref.</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={item.referenceCost}
+                          onChange={(event) => handleItemChange(index, 'referenceCost', event.target.value)}
+                          placeholder="Costo ref."
+                        />
+                      </label>
+
+                      <div className="manual-list-item-total">
+                        <span className="manual-list-item-label">Subtotal</span>
+                        <strong>{formatCurrency(item.lineTotal)}</strong>
+                      </div>
+
+                      <div className="manual-list-item-action">
+                        <button
+                          type="button"
+                          className="danger-ghost-btn"
+                          onClick={() => removeItem(index)}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="totals-box">
+                  <p className="total-line">
+                    <span>Total estimado interno</span>
+                    <strong>{formatCurrency(estimatedTotal)}</strong>
+                  </p>
+                </div>
+
+                {formError && <p className="payment-error">{formError}</p>}
+
+                <div className="order-form-actions">
+                  <button type="button" className="secondary-btn" onClick={closeFormModal}>
+                    Cancelar
+                  </button>
+                  <button type="button" className="primary-btn" onClick={handleSaveList}>
+                    Guardar como Pendiente
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

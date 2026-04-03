@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_CONFIG } from '../../config/app'
 import { getOrderFinancialSummary } from '../../utils/finance'
+import { formatOrderId } from '../../utils/orders'
 import { generateOrderPDF } from '../../utils/pdf'
 import ConfirmDeliveryModal from './ConfirmDeliveryModal'
 
@@ -70,6 +71,14 @@ const toDateInput = (value) => {
   return `${year}-${month}-${day}`
 }
 
+const getOrderStatusIcon = (status) => {
+  if (status === 'Pendiente') return '🟡'
+  if (status === 'En Proceso') return '🔵'
+  if (status === 'Listo') return '🟢'
+  if (status === 'Entregado') return '🚚'
+  return '•'
+}
+
 function OrdersList({
   orders,
   products,
@@ -78,6 +87,9 @@ function OrdersList({
   stockByProductId,
   deliveryFilter,
   onFilterChange,
+  searchQuery,
+  onSearchChange,
+  initialExpandedOrderId,
   onRegisterPayment,
   onUpdateOrderStatus,
   onUpdateOrderDelivery,
@@ -88,6 +100,7 @@ function OrdersList({
   onDeleteCancelledOrder,
 }) {
   const [expandedOrderId, setExpandedOrderId] = useState(null)
+  const didExpandFromPropRef = useRef('')
   const [paymentDrafts, setPaymentDrafts] = useState({})
   const [deliveryDrafts, setDeliveryDrafts] = useState({})
   const [itemsDrafts, setItemsDrafts] = useState({})
@@ -111,9 +124,9 @@ function OrdersList({
       return true
     })
   }, [orders])
-  const safeProducts = Array.isArray(products) ? products : []
-  const safePurchases = Array.isArray(purchases) ? purchases : []
-  const safeClients = Array.isArray(clients) ? clients : []
+  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
+  const safePurchases = useMemo(() => (Array.isArray(purchases) ? purchases : []), [purchases])
+  const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
   const safeStockByProductId = stockByProductId ?? {}
   const sortedProducts = useMemo(
     () =>
@@ -135,6 +148,13 @@ function OrdersList({
       setExpandedOrderId(null)
     }
   }, [safeOrders, expandedOrderId])
+
+  useEffect(() => {
+    if (!initialExpandedOrderId) return
+    if (didExpandFromPropRef.current === initialExpandedOrderId) return
+    didExpandFromPropRef.current = initialExpandedOrderId
+    setExpandedOrderId(initialExpandedOrderId)
+  }, [initialExpandedOrderId])
 
   useEffect(() => {
     if (typeof onUpdateOrderStatus !== 'function') return
@@ -358,6 +378,15 @@ function OrdersList({
         </div>
       </div>
 
+      <div className="clients-toolbar">
+        <input
+          type="text"
+          placeholder="Buscar por cliente, ID o producto..."
+          value={searchQuery ?? ''}
+          onChange={(event) => onSearchChange?.(event.target.value)}
+        />
+      </div>
+
       <div className="table-wrap">
         <table className="orders-table">
           <thead>
@@ -372,6 +401,7 @@ function OrdersList({
           <tbody>
             {safeOrders.map((order, index) => {
               const orderId = String(order.id ?? `pedido-${index}`)
+              const displayOrderId = formatOrderId(orderId)
               const orderClient = String(order.clientName ?? order.client ?? 'Sin cliente')
               const orderStatus = String(order.status ?? 'Pendiente')
               const financialNote = String(order.financialNote ?? '').trim()
@@ -399,6 +429,8 @@ function OrdersList({
                 ? 'status-entregado-deuda'
                 : statusClass
               const statusOptions = order.isSample ? sampleOrderStatuses : orderStatuses
+              const completedItems = items.filter((item) => Boolean(item?.itemCompleted)).length
+              const itemsProgressLabel = `${completedItems}/${items.length} completados`
               const hasItems = items.length > 0
               const allItemsCompleted = hasItems && items.every((item) => Boolean(item?.itemCompleted))
               const selectedClientId = String(order?.clientId ?? '')
@@ -761,7 +793,7 @@ function OrdersList({
                   >
                     <td>
                       <div className="order-id-cell">
-                        <span>{orderId}</span>
+                        <span>{displayOrderId}</span>
                         <button
                           type="button"
                           className={`urgent-toggle-btn ${isUrgent ? 'urgent-toggle-btn-active' : ''}`}
@@ -788,8 +820,9 @@ function OrdersList({
                           <span className="status-badge status-completed">✔ Completado</span>
                         )}
                         <span className={`status-badge ${statusBadgeClass}`}>
-                          {statusLabel}
+                          {`${getOrderStatusIcon(orderStatus)} ${statusLabel}`}
                         </span>
+                        {hasItems && <span className="order-items-progress-badge">{itemsProgressLabel}</span>}
                       </div>
                     </td>
                     <td>{order.isSample ? 'Muestra' : formatCurrency(finalTotal)}</td>

@@ -79,6 +79,61 @@ const getOrderStatusIcon = (status) => {
   return '•'
 }
 
+const parseDeliveryTimestamp = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day).getTime()
+}
+
+const parseCreatedTimestamp = (value) => {
+  const parsed = new Date(value)
+  const timestamp = parsed.getTime()
+  return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp
+}
+
+const orderSectionMeta = {
+  production: {
+    title: 'Producción',
+    badge: 'Producción',
+    description: 'Pedidos en preparación y trabajo de planta.',
+    accentClassName: 'orders-section-production',
+    emptyText: 'No hay pedidos en producción para este filtro.',
+  },
+  ready: {
+    title: 'Listos para entregar',
+    badge: 'Listo',
+    description: 'Pedidos terminados, pendientes de salida.',
+    accentClassName: 'orders-section-ready',
+    emptyText: 'No hay pedidos listos para entregar.',
+  },
+  collections: {
+    title: 'Por cobrar',
+    badge: 'Cobranza',
+    description: 'Pedidos entregados con saldo pendiente.',
+    accentClassName: 'orders-section-collections',
+    emptyText: 'No hay pedidos entregados con deuda.',
+  },
+  cancelled: {
+    title: 'Cancelados',
+    badge: 'Cancelado',
+    description: 'Pedidos fuera de operación, visibles para control.',
+    accentClassName: 'orders-section-cancelled',
+    emptyText: 'No hay pedidos cancelados.',
+  },
+}
+
+const getOperationalSectionKey = (order, remainingDebt = 0) => {
+  const status = String(order?.status ?? '')
+
+  if (status === 'Listo') return 'ready'
+  if (status === 'Entregado' && remainingDebt > 0) return 'collections'
+  if (status === 'Cancelado') return 'cancelled'
+  return 'production'
+}
+
 function OrdersList({
   orders,
   products,
@@ -89,6 +144,7 @@ function OrdersList({
   onFilterChange,
   searchQuery,
   onSearchChange,
+  archivedCount = 0,
   initialExpandedOrderId,
   onRegisterPayment,
   onUpdateOrderStatus,
@@ -112,6 +168,12 @@ function OrdersList({
     initialDeliveryType: '',
     initialDeliveredBy: '',
     initialDeliveryNote: '',
+  })
+  const [collapsedSections, setCollapsedSections] = useState({
+    production: false,
+    ready: false,
+    collections: false,
+    cancelled: true,
   })
   const safeOrders = useMemo(() => {
     const baseOrders = Array.isArray(orders) ? orders : []
@@ -288,6 +350,107 @@ function OrdersList({
     }, {})
   }, [safePurchases])
 
+  const orderFinancialMap = useMemo(
+    () =>
+      safeOrders.reduce((acc, order) => {
+        const orderId = String(order?.id ?? '')
+        if (!orderId) return acc
+        acc[orderId] = getOrderFinancialSummary(order)
+        return acc
+      }, {}),
+    [safeOrders],
+  )
+
+  const groupedSections = useMemo(() => {
+    const sectionBuckets = {
+      production: [],
+      ready: [],
+      collections: [],
+      cancelled: [],
+    }
+
+    safeOrders.forEach((order) => {
+      const orderId = String(order?.id ?? '')
+      const financialSummary = orderFinancialMap[orderId] ?? getOrderFinancialSummary(order)
+      const sectionKey = getOperationalSectionKey(order, financialSummary.remainingDebt)
+      sectionBuckets[sectionKey].push(order)
+    })
+
+    sectionBuckets.production.sort((a, b) => {
+      const aUrgent = Boolean(a?.urgent)
+      const bUrgent = Boolean(b?.urgent)
+      if (aUrgent && !bUrgent) return -1
+      if (!aUrgent && bUrgent) return 1
+
+      const aStatusRank = String(a?.status ?? '') === 'Pendiente' ? 0 : 1
+      const bStatusRank = String(b?.status ?? '') === 'Pendiente' ? 0 : 1
+      if (aStatusRank !== bStatusRank) return aStatusRank - bStatusRank
+
+      return parseDeliveryTimestamp(a?.deliveryDate) - parseDeliveryTimestamp(b?.deliveryDate)
+    })
+
+    sectionBuckets.ready.sort((a, b) => {
+      const aUrgent = Boolean(a?.urgent)
+      const bUrgent = Boolean(b?.urgent)
+      if (aUrgent && !bUrgent) return -1
+      if (!aUrgent && bUrgent) return 1
+      return parseDeliveryTimestamp(a?.deliveryDate) - parseDeliveryTimestamp(b?.deliveryDate)
+    })
+
+    sectionBuckets.collections.sort((a, b) => {
+      const aDebt = Number(orderFinancialMap[String(a?.id ?? '')]?.remainingDebt || 0)
+      const bDebt = Number(orderFinancialMap[String(b?.id ?? '')]?.remainingDebt || 0)
+      if (aDebt !== bDebt) return bDebt - aDebt
+      return parseDeliveryTimestamp(a?.deliveryDate) - parseDeliveryTimestamp(b?.deliveryDate)
+    })
+
+    sectionBuckets.cancelled.sort(
+      (a, b) => parseCreatedTimestamp(b?.createdAt) - parseCreatedTimestamp(a?.createdAt),
+    )
+
+    return Object.entries(orderSectionMeta).map(([key, meta]) => {
+      const sectionOrders = sectionBuckets[key] ?? []
+      const totalDebt = sectionOrders.reduce((acc, order) => {
+        const orderId = String(order?.id ?? '')
+        return acc + Number(orderFinancialMap[orderId]?.remainingDebt || 0)
+      }, 0)
+
+      return {
+        key,
+        ...meta,
+        orders: sectionOrders,
+        count: sectionOrders.length,
+        totalDebt,
+      }
+    })
+  }, [orderFinancialMap, safeOrders])
+
+  useEffect(() => {
+    if (!initialExpandedOrderId) return
+
+    const expandedOrder = safeOrders.find(
+      (order) => String(order?.id ?? '') === String(initialExpandedOrderId),
+    )
+    if (!expandedOrder) return
+
+    const remainingDebt = Number(
+      orderFinancialMap[String(expandedOrder?.id ?? '')]?.remainingDebt || 0,
+    )
+    const sectionKey = getOperationalSectionKey(expandedOrder, remainingDebt)
+
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionKey]: false,
+    }))
+  }, [initialExpandedOrderId, orderFinancialMap, safeOrders])
+
+  const toggleSection = (sectionKey) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionKey]: !prev[sectionKey],
+    }))
+  }
+
   const toggleOrder = (orderId) => {
     setExpandedOrderId((currentId) => (currentId === orderId ? null : orderId))
   }
@@ -351,8 +514,13 @@ function OrdersList({
 
   return (
     <section className="card-block">
-      <div className="card-head">
-        <h3>Listado de pedidos</h3>
+      <div className="card-head orders-card-head">
+        <div>
+          <h3>Flujo operativo de pedidos</h3>
+          <p className="orders-card-helper">
+            Archivados fuera del tablero: <strong>{archivedCount}</strong>
+          </p>
+        </div>
         <div className="list-filters" role="group" aria-label="Filtrar por fecha de entrega">
           <button
             type="button"
@@ -395,12 +563,47 @@ function OrdersList({
               <th>Cliente</th>
               <th>Entrega</th>
               <th>Estado</th>
-              <th>Total</th>
+              <th>Total / acción</th>
             </tr>
           </thead>
           <tbody>
-            {safeOrders.map((order, index) => {
-              const orderId = String(order.id ?? `pedido-${index}`)
+            {groupedSections.map((section) => {
+              const isCollapsed = Boolean(collapsedSections[section.key])
+              const debtLabel =
+                section.key === 'collections' && section.totalDebt > 0
+                  ? ` · ${formatCurrency(section.totalDebt)} pendientes`
+                  : ''
+
+              return (
+                <Fragment key={section.key}>
+                  <tr className={`orders-section-row ${section.accentClassName}`}>
+                    <td colSpan={5}>
+                      <button
+                        type="button"
+                        className="orders-section-toggle"
+                        onClick={() => toggleSection(section.key)}
+                        aria-expanded={!isCollapsed}
+                      >
+                        <span className="orders-section-toggle-title">
+                          <span className="orders-section-chevron">{isCollapsed ? '▸' : '▾'}</span>
+                          <span>{section.title}</span>
+                          <span className="orders-section-count">{section.count}</span>
+                        </span>
+                        <span className="orders-section-description">{section.description}{debtLabel}</span>
+                      </button>
+                    </td>
+                  </tr>
+
+                  {!isCollapsed && section.orders.length === 0 && (
+                    <tr className="orders-section-empty-row">
+                      <td colSpan={5} className="empty-detail">
+                        {section.emptyText}
+                      </td>
+                    </tr>
+                  )}
+
+                  {!isCollapsed && section.orders.map((order, index) => {
+                    const orderId = String(order.id ?? `pedido-${index}`)
               const displayOrderId = formatOrderId(orderId)
               const orderClient = String(order.clientName ?? order.client ?? 'Sin cliente')
               const orderStatus = String(order.status ?? 'Pendiente')
@@ -441,6 +644,8 @@ function OrdersList({
               ]
               const selectedClientIdForSelect =
                 selectedClientId || String(resolvedClientByName?.id ?? '')
+              const sectionBadgeLabel = section.badge
+              const rowAccentClassName = section.accentClassName
 
               const isUrgent = Boolean(order?.urgent)
               const isExpanded = expandedOrderId === orderId
@@ -501,6 +706,52 @@ function OrdersList({
               const normalizedShippingCost = Number.isNaN(shippingCostValue)
                 ? 0
                 : Math.max(shippingCostValue, 0)
+              const quickActionLabel =
+                orderStatus === 'Pendiente'
+                  ? 'Iniciar producción'
+                  : orderStatus === 'En Proceso'
+                    ? 'Marcar listo'
+                    : orderStatus === 'Listo'
+                      ? 'Registrar entrega'
+                      : isDeliveredWithDebt
+                        ? 'Cobrar saldo'
+                        : ''
+
+              const handleQuickAction = (event) => {
+                event.stopPropagation()
+
+                if (orderStatus === 'Pendiente') {
+                  onUpdateOrderStatus?.(orderId, 'En Proceso')
+                  return
+                }
+
+                if (orderStatus === 'En Proceso') {
+                  if (!allItemsCompleted) {
+                    const shouldContinue = window.confirm(
+                      'Todavía hay ítems sin completar. ¿Querés marcar igual este pedido como LISTO?',
+                    )
+                    if (!shouldContinue) return
+                  }
+
+                  onUpdateOrderStatus?.(orderId, 'Listo')
+                  return
+                }
+
+                if (orderStatus === 'Listo') {
+                  setDeliveryConfirmModal({
+                    isOpen: true,
+                    orderId,
+                    initialDeliveryType: String(order?.deliveryType ?? order?.deliveredVia ?? '').trim(),
+                    initialDeliveredBy: String(order?.deliveredBy ?? '').trim(),
+                    initialDeliveryNote: String(order?.deliveryNote ?? order?.deliveryDetails ?? '').trim(),
+                  })
+                  return
+                }
+
+                if (isDeliveredWithDebt) {
+                  setExpandedOrderId(orderId)
+                }
+              }
 
               const handleAddPayment = () => {
                 const amount = Number(paymentDraft.amount)
@@ -788,12 +1039,15 @@ function OrdersList({
               return (
                 <Fragment key={orderId}>
                   <tr
-                    className={`order-main-row ${order.isSample ? 'order-main-row-sample' : ''} ${isExpanded ? 'order-main-row-expanded' : ''}`}
+                    className={`order-main-row ${rowAccentClassName} ${order.isSample ? 'order-main-row-sample' : ''} ${isExpanded ? 'order-main-row-expanded' : ''}`}
                     onClick={() => toggleOrder(orderId)}
                   >
                     <td>
                       <div className="order-id-cell">
-                        <span>{displayOrderId}</span>
+                        <div className="order-id-stack">
+                          <span>{displayOrderId}</span>
+                          <span className={`order-flow-badge ${rowAccentClassName}`}>{sectionBadgeLabel}</span>
+                        </div>
                         <button
                           type="button"
                           className={`urgent-toggle-btn ${isUrgent ? 'urgent-toggle-btn-active' : ''}`}
@@ -825,7 +1079,20 @@ function OrdersList({
                         {hasItems && <span className="order-items-progress-badge">{itemsProgressLabel}</span>}
                       </div>
                     </td>
-                    <td>{order.isSample ? 'Muestra' : formatCurrency(finalTotal)}</td>
+                    <td>
+                      <div className="order-total-cell">
+                        <strong>{order.isSample ? 'Muestra' : formatCurrency(finalTotal)}</strong>
+                        {quickActionLabel && (
+                          <button
+                            type="button"
+                            className={`order-quick-action-btn ${rowAccentClassName}`}
+                            onClick={handleQuickAction}
+                          >
+                            {quickActionLabel}
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
 
                   {isExpanded && (() => {
@@ -1367,16 +1634,10 @@ function OrdersList({
                     }
                   })()}
                 </Fragment>
-              )
-            })}
-
-            {safeOrders.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty-detail">
-                  No hay pedidos para el filtro seleccionado.
-                </td>
-              </tr>
-            )}
+              )})}
+            </Fragment>
+          )
+        })}
           </tbody>
         </table>
       </div>

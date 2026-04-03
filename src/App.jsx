@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './layout/AppLayout'
 import ArchivedOrdersPage from './pages/ArchivedOrdersPage'
@@ -21,6 +21,10 @@ import useProductsState from './state/useProductsState'
 import usePurchasesState from './state/usePurchasesState'
 import useQuotesState from './state/useQuotesState'
 import useSuppliersState from './state/useSuppliersState'
+import { getOrderFinancialSummary } from './utils/finance'
+import { calculateStockSnapshot } from './utils/stock'
+
+const HIGH_DEBT_THRESHOLD = 250000
 
 function App() {
   const [isClosing, setIsClosing] = useState(false)
@@ -415,6 +419,95 @@ function App() {
     return { orderId }
   }
 
+  const globalAlerts = useMemo(() => {
+    const safeOrders = Array.isArray(orders) ? orders : []
+    const safeProducts = Array.isArray(products) ? products : []
+
+    const todayKey = (() => {
+      const d = new Date()
+      const year = d.getFullYear()
+      const month = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}`
+    })()
+
+    const delayedOrdersCount = safeOrders.filter((order) => {
+      if (order?.isArchived === true) return false
+      const status = String(order?.status ?? '')
+      if (status === 'Entregado' || status === 'Cancelado') return false
+      const deliveryDate = String(order?.deliveryDate ?? '')
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return false
+      return deliveryDate < todayKey
+    }).length
+
+    const debtByClient = safeOrders.reduce((acc, order) => {
+      if (!order || typeof order !== 'object') return acc
+      if (order.isSample) return acc
+
+      const clientId = String(order.clientId ?? '').trim() || `name:${String(order.clientName ?? order.client ?? 'sin-cliente').trim().toLowerCase()}`
+      const summary = getOrderFinancialSummary(order)
+      acc[clientId] = (acc[clientId] ?? 0) + Number(summary.remainingDebt || 0)
+      return acc
+    }, {})
+
+    const highDebtClientsCount = Object.values(debtByClient).filter((amount) => Number(amount || 0) > HIGH_DEBT_THRESHOLD).length
+
+    const stockRows = calculateStockSnapshot(safeProducts, safeOrders)
+    const stockCriticalCount = stockRows.filter((row) => {
+      const available = Number(row?.stockDisponible || 0)
+      const minimum = Number(row?.stockMinimo || 0)
+      return available <= minimum
+    }).length
+
+    const alerts = [
+      {
+        id: 'delayed-orders',
+        severity: delayedOrdersCount > 0 ? 'critical' : 'ok',
+        icon: delayedOrdersCount > 0 ? '🔴' : '🟢',
+        label: delayedOrdersCount > 0
+          ? `${delayedOrdersCount} pedidos retrasados`
+          : 'Pedidos en fecha',
+        targetHash: '/pedidos',
+      },
+      {
+        id: 'high-debt-clients',
+        severity: highDebtClientsCount > 0 ? 'medium' : 'ok',
+        icon: highDebtClientsCount > 0 ? '🟠' : '🟢',
+        label: highDebtClientsCount > 0
+          ? `${highDebtClientsCount} clientes con deuda alta`
+          : 'Deuda de clientes controlada',
+        targetHash: '/clientes',
+      },
+      {
+        id: 'stock-critical',
+        severity: stockCriticalCount > 0 ? 'critical' : 'ok',
+        icon: stockCriticalCount > 0 ? '🔴' : '🟢',
+        label: stockCriticalCount > 0
+          ? `${stockCriticalCount} productos en stock crítico`
+          : 'Stock en niveles correctos',
+        targetHash: '/stock',
+      },
+    ]
+
+    const severityRank = {
+      critical: 3,
+      medium: 2,
+      ok: 1,
+    }
+
+    return alerts.sort((a, b) => {
+      const rankDiff = (severityRank[String(b.severity)] ?? 0) - (severityRank[String(a.severity)] ?? 0)
+      if (rankDiff !== 0) return rankDiff
+      return String(a.label ?? '').localeCompare(String(b.label ?? ''), 'es', { sensitivity: 'base' })
+    })
+  }, [orders, products])
+
+  const handleOpenGlobalAlert = (alert) => {
+    const targetHash = String(alert?.targetHash ?? '').trim()
+    if (!targetHash) return
+    window.location.hash = `#${targetHash}`
+  }
+
   return (
     <HashRouter>
       <Routes>
@@ -428,6 +521,8 @@ function App() {
               saveToastVisible={saveToastVisible}
               saveToastToken={saveToastToken}
               onCloseSaveToast={() => setSaveToastVisible(false)}
+              globalAlerts={globalAlerts}
+              onOpenAlert={handleOpenGlobalAlert}
             />
           }
         >

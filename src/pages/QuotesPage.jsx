@@ -134,6 +134,7 @@ function QuotesPage({
   const [productSearch, setProductSearch] = useState('')
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
   const [activeItemIndex, setActiveItemIndex] = useState(0)
+  const [confirmedItems, setConfirmedItems] = useState({})
   const [listFilter, setListFilter] = useState('active')
   const productSearchInputRef = useRef(null)
 
@@ -236,6 +237,14 @@ function QuotesPage({
   )
 
   const handleDraftItemChange = (index, field, value) => {
+    setConfirmedItems((prev) => {
+      if (!prev[index]) return prev
+      return {
+        ...prev,
+        [index]: false,
+      }
+    })
+
     setItems((prevItems) =>
       prevItems.map((item, itemIndex) => {
         if (itemIndex !== index) return item
@@ -278,6 +287,23 @@ function QuotesPage({
 
   const addDraftItem = () => {
     setItems((prevItems) => {
+      const existingEmptyIndex = prevItems.findIndex((item, index) => {
+        const isConfirmed = Boolean(confirmedItems[index])
+        if (isConfirmed) return false
+
+        const isExistingMode = String(item?.sourceMode ?? 'existing') === 'existing'
+        if (isExistingMode) {
+          return !String(item?.productId ?? '').trim()
+        }
+
+        return !String(item?.description ?? '').trim()
+      })
+
+      if (existingEmptyIndex >= 0) {
+        setActiveItemIndex(existingEmptyIndex)
+        return prevItems
+      }
+
       const nextItems = [...prevItems, createDraftItem()]
       setActiveItemIndex(nextItems.length - 1)
       return nextItems
@@ -287,6 +313,22 @@ function QuotesPage({
   const removeDraftItem = (index) => {
     setItems((prevItems) => {
       if (prevItems.length === 1) return prevItems
+
+      setConfirmedItems((prev) => {
+        const next = {}
+        Object.keys(prev).forEach((key) => {
+          const numericKey = Number(key)
+          if (!Number.isInteger(numericKey)) return
+          if (numericKey === index) return
+          if (numericKey > index) {
+            next[numericKey - 1] = prev[key]
+            return
+          }
+          next[numericKey] = prev[key]
+        })
+        return next
+      })
+
       setActiveItemIndex((current) => {
         if (current > index) return current - 1
         if (current === index) return Math.max(index - 1, 0)
@@ -294,6 +336,49 @@ function QuotesPage({
       })
       return prevItems.filter((_, itemIndex) => itemIndex !== index)
     })
+  }
+
+  const isDraftItemConfirmed = (index) => Boolean(confirmedItems[index])
+
+  const canConfirmDraftItem = (item) => {
+    if (!item) return false
+
+    const sourceMode = String(item.sourceMode ?? 'existing')
+    if (sourceMode === 'existing') {
+      return String(item.productId ?? '').trim().length > 0
+    }
+
+    return String(item.description ?? '').trim().length > 0
+  }
+
+  const confirmDraftItem = (index) => {
+    const targetItem = items[index]
+    if (!canConfirmDraftItem(targetItem)) return
+
+    setConfirmedItems((prev) => ({
+      ...prev,
+      [index]: true,
+    }))
+
+    const nextIndex = index + 1
+    if (nextIndex < items.length) {
+      setActiveItemIndex(nextIndex)
+      return
+    }
+
+    setItems((prevItems) => {
+      const nextItems = [...prevItems, createDraftItem()]
+      setActiveItemIndex(nextItems.length - 1)
+      return nextItems
+    })
+  }
+
+  const unlockDraftItem = (index) => {
+    setConfirmedItems((prev) => ({
+      ...prev,
+      [index]: false,
+    }))
+    setActiveItemIndex(index)
   }
 
   const quickSelectProduct = (productId) => {
@@ -305,16 +390,24 @@ function QuotesPage({
     setItems((prevItems) => {
       const safeItems = Array.isArray(prevItems) ? prevItems : [createDraftItem()]
       const activeIndexIsValid = activeItemIndex >= 0 && activeItemIndex < safeItems.length
+      const activeIndexEditable = activeIndexIsValid && confirmedItems[activeItemIndex] !== true
 
       const firstEmpty = safeItems.findIndex(
-        (item) => String(item?.sourceMode ?? 'existing') === 'existing' && !String(item?.productId ?? '').trim(),
+        (item, index) =>
+          confirmedItems[index] !== true &&
+          String(item?.sourceMode ?? 'existing') === 'existing' &&
+          !String(item?.productId ?? '').trim(),
       )
 
-      const indexToUse = activeIndexIsValid
+      const firstEditable = safeItems.findIndex((_, index) => confirmedItems[index] !== true)
+
+      const indexToUse = activeIndexEditable
         ? activeItemIndex
         : firstEmpty >= 0
           ? firstEmpty
-          : Math.max(safeItems.length - 1, 0)
+          : firstEditable >= 0
+            ? firstEditable
+            : Math.max(safeItems.length - 1, 0)
       selectedIndex = indexToUse
 
       const selectedProduct = productById[safeProductId]
@@ -398,6 +491,7 @@ function QuotesPage({
     setProductSearch('')
     setHighlightedSuggestionIndex(0)
     setActiveItemIndex(0)
+    setConfirmedItems({})
     setIsFormModalOpen(false)
 
     if (submitMode === 'pdf') {
@@ -627,6 +721,7 @@ function QuotesPage({
     setProductSearch('')
     setHighlightedSuggestionIndex(0)
     setActiveItemIndex(0)
+    setConfirmedItems({})
   }
 
   return (
@@ -1053,10 +1148,16 @@ function QuotesPage({
                 <div className="items-stack">
                   {items.map((item, index) => (
                     <div key={`quote-item-${index}`} className="quote-item-row">
+                      {(() => {
+                        const itemIsConfirmed = isDraftItemConfirmed(index)
+
+                        return (
+                          <>
                       <select
                         value={item.sourceMode}
                         onChange={(event) => handleDraftItemChange(index, 'sourceMode', event.target.value)}
                         onFocus={() => setActiveItemIndex(index)}
+                        disabled={itemIsConfirmed}
                       >
                         <option value="existing">Producto existente</option>
                         <option value="manual">Producto manual</option>
@@ -1067,6 +1168,7 @@ function QuotesPage({
                           value={item.productId}
                           onChange={(event) => handleDraftItemChange(index, 'productId', event.target.value)}
                           onFocus={() => setActiveItemIndex(index)}
+                          disabled={itemIsConfirmed}
                         >
                           <option value="">Seleccionar producto</option>
                           {(item.productId && productById[item.productId]
@@ -1083,6 +1185,7 @@ function QuotesPage({
                           value={item.description}
                           onChange={(event) => handleDraftItemChange(index, 'description', event.target.value)}
                           onFocus={() => setActiveItemIndex(index)}
+                          disabled={itemIsConfirmed}
                           placeholder="Descripción manual"
                         />
                       )}
@@ -1093,6 +1196,7 @@ function QuotesPage({
                         value={item.quantity}
                         onChange={(event) => handleDraftItemChange(index, 'quantity', event.target.value)}
                         onFocus={() => setActiveItemIndex(index)}
+                        disabled={itemIsConfirmed}
                         placeholder="Cantidad"
                       />
                       <input
@@ -1101,6 +1205,7 @@ function QuotesPage({
                         value={item.unitPrice}
                         onChange={(event) => handleDraftItemChange(index, 'unitPrice', event.target.value)}
                         onFocus={() => setActiveItemIndex(index)}
+                        disabled={itemIsConfirmed}
                         placeholder="Precio unitario"
                       />
                       <button
@@ -1110,11 +1215,32 @@ function QuotesPage({
                       >
                         Quitar
                       </button>
+                      {!itemIsConfirmed ? (
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          onClick={() => confirmDraftItem(index)}
+                          disabled={!canConfirmDraftItem(item)}
+                        >
+                          Confirmar
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="quick-fill-btn"
+                          onClick={() => unlockDraftItem(index)}
+                        >
+                          Editar
+                        </button>
+                      )}
                       {item.sourceMode === 'existing' && item.productId && (
                         <p className="payment-helper">
                           Precio sugerido: <strong>{formatCurrency(productById[item.productId]?.salePrice || 0)}</strong>
                         </p>
                       )}
+                          </>
+                        )
+                      })()}
                     </div>
                   ))}
                 </div>

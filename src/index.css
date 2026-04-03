@@ -205,6 +205,45 @@ input[type='number']:focus {
   position: relative;
 }
 
+.global-alerts-bar {
+  margin: 0 0 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.global-alert-chip {
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1e293b;
+  padding: 0.35rem 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.global-alert-chip-critical {
+  border-color: #fca5a5;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.global-alert-chip-medium {
+  border-color: #fcd34d;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.global-alert-chip-ok {
+  border-color: #86efac;
+  background: #dcfce7;
+  color: #166534;
+}
+
 .save-indicator {
   position: fixed;
   bottom: 1rem;
@@ -1558,6 +1597,17 @@ input[type='number']:focus {
   overflow-x: auto;
 }
 
+.orders-card-head {
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.orders-card-helper {
+  margin: 0.25rem 0 0;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
 .orders-table {
   width: 100%;
   border-collapse: collapse;
@@ -1576,6 +1626,69 @@ input[type='number']:focus {
   font-weight: 600;
 }
 
+.orders-section-row td {
+  padding: 0;
+  border-bottom: 0;
+}
+
+.orders-section-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.orders-section-toggle-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+.orders-section-description {
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.orders-section-chevron {
+  font-size: 0.92rem;
+}
+
+.orders-section-count {
+  display: inline-flex;
+  min-width: 26px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.orders-section-production {
+  background: #eff6ff;
+}
+
+.orders-section-ready {
+  background: #ecfdf5;
+}
+
+.orders-section-collections {
+  background: #fff7ed;
+}
+
+.orders-section-cancelled {
+  background: #f8fafc;
+}
+
 .order-main-row {
   cursor: pointer;
   transition: background-color 140ms ease;
@@ -1583,6 +1696,22 @@ input[type='number']:focus {
 
 .order-main-row:hover {
   background: #f5f8ff;
+}
+
+.order-main-row.orders-section-production {
+  background: #f8fbff;
+}
+
+.order-main-row.orders-section-ready {
+  background: #f7fff9;
+}
+
+.order-main-row.orders-section-collections {
+  background: #fffaf4;
+}
+
+.order-main-row.orders-section-cancelled {
+  background: #f8fafc;
 }
 
 .order-main-row-expanded {
@@ -1607,6 +1736,85 @@ input[type='number']:focus {
   padding: 0.75rem;
   display: grid;
   gap: 0.75rem;
+}
+
+.order-id-stack {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.order-flow-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.08rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  border: 1px solid transparent;
+}
+
+.order-flow-badge.orders-section-production {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+}
+
+.order-flow-badge.orders-section-ready {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.order-flow-badge.orders-section-collections {
+  background: #ffedd5;
+  color: #c2410c;
+  border-color: #fdba74;
+}
+
+.order-flow-badge.orders-section-cancelled {
+  background: #e2e8f0;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+
+.order-total-cell {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: start;
+}
+
+.order-total-cell strong {
+  color: #0f172a;
+}
+
+.order-quick-action-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.34rem 0.65rem;
+  font-size: 0.74rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.order-quick-action-btn.orders-section-production {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.order-quick-action-btn.orders-section-ready {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.order-quick-action-btn.orders-section-collections {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.order-quick-action-btn.orders-section-cancelled {
+  background: #e2e8f0;
+  color: #475569;
 }
 
 .order-items-table {
@@ -2325,6 +2533,10 @@ input[type='number']:focus {
   .save-indicator {
     left: 0.6rem;
     bottom: 0.6rem;
+  }
+
+  .global-alerts-bar {
+    margin-right: 0;
   }
 
   .save-toast {

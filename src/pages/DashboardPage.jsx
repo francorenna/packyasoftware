@@ -127,6 +127,33 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
     },
   ]
 
+  const monthlyFinancialCards = useMemo(
+    () => [
+      {
+        key: 'income-month',
+        label: 'Ingresos del mes (cobrado)',
+        value: formatCurrency(Number(monthlyFinanceSummary.monthlyCollected || 0)),
+      },
+      {
+        key: 'outflow-month',
+        label: 'Egresos del mes',
+        value: formatCurrency(Number(monthlyFinanceSummary.monthlyOutflow || 0)),
+      },
+      {
+        key: 'real-profit-month',
+        label: 'Ganancia real del mes',
+        value: formatCurrency(monthlyRealCash),
+        className: monthlyRealCashClassName,
+      },
+      {
+        key: 'street-money',
+        label: 'Dinero en la calle (deuda total)',
+        value: formatCurrency(Number(summary.totalPending || 0)),
+      },
+    ],
+    [monthlyFinanceSummary.monthlyCollected, monthlyFinanceSummary.monthlyOutflow, monthlyRealCash, monthlyRealCashClassName, summary.totalPending],
+  )
+
   const latestOrders = useMemo(() => {
     return [...safeOrders]
       .sort(
@@ -191,6 +218,20 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
           <p>💰 Caja real del mes (cobrado - invertido - egresos)</p>
           <strong className={monthlyRealCashClassName}>{formatCurrency(monthlyRealCash)}</strong>
         </article>
+      </section>
+
+      <section className="dashboard-recent">
+        <div className="card-head">
+          <h3>Panel financiero mensual</h3>
+        </div>
+        <div className="dashboard-day-summary-grid">
+          {monthlyFinancialCards.map((card) => (
+            <article key={card.key} className="dashboard-card dashboard-day-summary-card">
+              <p>{card.label}</p>
+              <strong className={card.className}>{card.value}</strong>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="dashboard-recent">

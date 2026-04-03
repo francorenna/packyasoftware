@@ -21,6 +21,8 @@ function AppLayout({
   saveToastVisible,
   saveToastToken,
   onCloseSaveToast,
+  globalAlerts,
+  onOpenAlert,
 }) {
   const statusLabel =
     saveStatus === 'saving'
@@ -54,6 +56,19 @@ function AppLayout({
           duration={1500}
           onClose={onCloseSaveToast}
         />
+        <section className="global-alerts-bar" aria-label="Alertas globales">
+          {(Array.isArray(globalAlerts) ? globalAlerts : []).map((alert) => (
+            <button
+              key={String(alert.id ?? alert.label ?? 'global-alert')}
+              type="button"
+              className={`global-alert-chip global-alert-chip-${String(alert.severity ?? 'ok')}`}
+              onClick={() => onOpenAlert?.(alert)}
+            >
+              <span>{String(alert.icon ?? '•')}</span>
+              <span>{String(alert.label ?? '')}</span>
+            </button>
+          ))}
+        </section>
         <Outlet />
       </main>
       {isClosing && <ClosingOverlay visible={isClosing} message={closeMessage} />}

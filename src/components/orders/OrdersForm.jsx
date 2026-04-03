@@ -120,6 +120,7 @@ function OrdersForm({
   onSuccess,
   onCancel,
   isModal,
+  formId,
 }) {
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
@@ -774,7 +775,7 @@ function OrdersForm({
         </div>
       )}
 
-      <form className="order-form" onSubmit={handleSubmit}>
+      <form id={formId} className="order-form" onSubmit={handleSubmit}>
         <label>
           <input
             type="checkbox"

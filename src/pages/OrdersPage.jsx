@@ -64,6 +64,8 @@ const getOrderDateSortTimestamp = (order) => {
 const generateNextOrderId = () =>
   `PED-${Date.now()}-${Math.floor(Math.random() * 1000)}`
 
+const ORDER_MODAL_FORM_ID = 'order-create-form'
+
 function OrdersPage({
   orders,
   products,
@@ -127,6 +129,42 @@ function OrdersPage({
     }
   }, [saveSuccessMessage])
 
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      const target = event.target
+      const isInputLike =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement
+
+      const key = String(event.key ?? '').toLowerCase()
+
+      if (key === 'n' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (isInputLike) return
+        event.preventDefault()
+        openFormModal()
+        return
+      }
+
+      if ((event.ctrlKey || event.metaKey) && key === 's') {
+        if (!isFormModalOpen) return
+        event.preventDefault()
+        const form = document.getElementById(ORDER_MODAL_FORM_ID)
+        form?.requestSubmit()
+        return
+      }
+
+      if (event.key === 'Escape' && isFormModalOpen) {
+        event.preventDefault()
+        closeFormModal()
+      }
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [closeFormModal, isFormModalOpen, openFormModal])
+
   const todayDate = useMemo(() => new Date(), [])
   const todayKey = useMemo(() => formatDateInput(todayDate), [todayDate])
   const tomorrowKey = useMemo(() => {
@@ -172,13 +210,18 @@ function OrdersPage({
     })
   }, [deliveryFilter, orders, searchQuery, todayKey, tomorrowKey])
 
+  const archivedOrderCount = useMemo(
+    () => orders.filter((order) => order?.isArchived === true).length,
+    [orders],
+  )
+
   const productionSummary = useMemo(() => {
     const summary = {
       urgent: { cantidadPedidos: 0, totalCajas: 0 },
-      pending: { cantidadPedidos: 0, totalCajas: 0 },
-      inProgress: { cantidadPedidos: 0, totalCajas: 0 },
+      production: { cantidadPedidos: 0, totalCajas: 0 },
       ready: { cantidadPedidos: 0, totalCajas: 0 },
-      toDeliver: { cantidadPedidos: 0, totalCajas: 0 },
+      collections: { cantidadPedidos: 0, totalDeuda: 0 },
+      cancelled: { cantidadPedidos: 0, totalCajas: 0 },
     }
 
     displayedOrders.forEach((order) => {
@@ -190,14 +233,9 @@ function OrdersPage({
         summary.urgent.totalCajas += totalCajas
       }
 
-      if (status === 'Pendiente') {
-        summary.pending.cantidadPedidos += 1
-        summary.pending.totalCajas += totalCajas
-      }
-
-      if (status === 'En Proceso') {
-        summary.inProgress.cantidadPedidos += 1
-        summary.inProgress.totalCajas += totalCajas
+      if (status === 'Pendiente' || status === 'En Proceso') {
+        summary.production.cantidadPedidos += 1
+        summary.production.totalCajas += totalCajas
       }
 
       if (status === 'Listo') {
@@ -206,8 +244,21 @@ function OrdersPage({
       }
 
       if (status === 'Entregado' && order?.isArchived !== true) {
-        summary.toDeliver.cantidadPedidos += 1
-        summary.toDeliver.totalCajas += totalCajas
+        const totalPaid = (Array.isArray(order?.payments) ? order.payments : []).reduce(
+          (acc, payment) => acc + toPositiveNumber(payment?.amount),
+          0,
+        )
+        const remainingDebt = Math.max(toPositiveNumber(order?.total) - totalPaid, 0)
+
+        if (remainingDebt > 0) {
+          summary.collections.cantidadPedidos += 1
+          summary.collections.totalDeuda += remainingDebt
+        }
+      }
+
+      if (status === 'Cancelado') {
+        summary.cancelled.cantidadPedidos += 1
+        summary.cancelled.totalCajas += totalCajas
       }
     })
 
@@ -219,31 +270,50 @@ function OrdersPage({
       key: 'urgent',
       icon: '🔥',
       title: 'Urgentes',
-      data: productionSummary.urgent,
+      value: productionSummary.urgent.cantidadPedidos,
+      helper: 'Pedidos',
+      secondaryValue: productionSummary.urgent.totalCajas,
+      secondaryHelper: 'Cajas',
     },
     {
-      key: 'pending',
-      icon: '⏳',
-      title: 'Pendientes',
-      data: productionSummary.pending,
-    },
-    {
-      key: 'inProgress',
+      key: 'production',
       icon: '⚙',
-      title: 'En producción',
-      data: productionSummary.inProgress,
+      title: 'Producción',
+      value: productionSummary.production.cantidadPedidos,
+      helper: 'Pedidos activos',
+      secondaryValue: productionSummary.production.totalCajas,
+      secondaryHelper: 'Cajas',
     },
     {
       key: 'ready',
       icon: '✅',
       title: 'Listos',
-      data: productionSummary.ready,
+      value: productionSummary.ready.cantidadPedidos,
+      helper: 'Para entregar',
+      secondaryValue: productionSummary.ready.totalCajas,
+      secondaryHelper: 'Cajas',
     },
     {
-      key: 'toDeliver',
-      icon: '🚚',
-      title: 'Por entregar',
-      data: productionSummary.toDeliver,
+      key: 'collections',
+      icon: '💸',
+      title: 'Por cobrar',
+      value: productionSummary.collections.cantidadPedidos,
+      helper: 'Pedidos',
+      secondaryValue: new Intl.NumberFormat('es-AR', {
+        style: 'currency',
+        currency: 'ARS',
+        maximumFractionDigits: 0,
+      }).format(productionSummary.collections.totalDeuda),
+      secondaryHelper: 'Saldo pendiente',
+    },
+    {
+      key: 'cancelled',
+      icon: '🧾',
+      title: 'Cancelados',
+      value: productionSummary.cancelled.cantidadPedidos,
+      helper: 'Pedidos',
+      secondaryValue: productionSummary.cancelled.totalCajas,
+      secondaryHelper: 'Cajas',
     },
   ]
 
@@ -276,10 +346,10 @@ function OrdersPage({
             {summaryCards.map((card) => (
               <article key={card.key} className="summary-card">
                 <p className="summary-label">{card.icon} {card.title}</p>
-                <p className="summary-number">{card.data.cantidadPedidos}</p>
-                <p className="summary-helper">Pedidos</p>
-                <p className="summary-number">{card.data.totalCajas}</p>
-                <p className="summary-helper">Cajas</p>
+                <p className="summary-number">{card.value}</p>
+                <p className="summary-helper">{card.helper}</p>
+                <p className="summary-number">{card.secondaryValue}</p>
+                <p className="summary-helper">{card.secondaryHelper}</p>
               </article>
             ))}
           </div>
@@ -295,6 +365,7 @@ function OrdersPage({
           onFilterChange={setDeliveryFilter}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          archivedCount={archivedOrderCount}
           initialExpandedOrderId={openOrderId}
           onRegisterPayment={onRegisterPayment}
           onUpdateOrderStatus={onUpdateOrderStatus}
@@ -333,6 +404,7 @@ function OrdersPage({
                 onCreateClient={onCreateClient}
                 onProductUsed={onMarkProductAsUsed}
                 isModal
+                formId={ORDER_MODAL_FORM_ID}
               />
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const deliveryTypeOptions = ['Retira en fábrica', 'Entrega propia', 'Envío por encomienda']
 
@@ -6,6 +6,7 @@ function ConfirmDeliveryModal({
   initialDeliveryType,
   initialDeliveredBy,
   initialDeliveryNote,
+  showTitle = true,
   onConfirm,
   onCancel,
 }) {
@@ -13,6 +14,17 @@ function ConfirmDeliveryModal({
   const [deliveredBy, setDeliveredBy] = useState(String(initialDeliveredBy ?? '').trim())
   const [deliveryNote, setDeliveryNote] = useState(String(initialDeliveryNote ?? '').trim())
   const [errors, setErrors] = useState({})
+  const deliveredByInputRef = useRef(null)
+
+  useEffect(() => {
+    const focusTimeoutId = window.setTimeout(() => {
+      deliveredByInputRef.current?.focus()
+    }, 40)
+
+    return () => {
+      window.clearTimeout(focusTimeoutId)
+    }
+  }, [])
 
   const handleConfirm = () => {
     const nextErrors = {}
@@ -39,14 +51,13 @@ function ConfirmDeliveryModal({
 
   return (
     <div className="confirm-delivery-modal" role="dialog" aria-label="Confirmar entrega">
-      <h4>Confirmar entrega</h4>
+      {showTitle && <h4>Confirmar entrega</h4>}
 
       <label>
         Tipo de entrega
         <select
           value={deliveryType}
           onChange={(event) => setDeliveryType(event.target.value)}
-          autoFocus
         >
           <option value="">Seleccionar tipo</option>
           {deliveryTypeOptions.map((option) => (
@@ -61,10 +72,12 @@ function ConfirmDeliveryModal({
       <label>
         Entregado por
         <input
+          ref={deliveredByInputRef}
           type="text"
           value={deliveredBy}
           onChange={(event) => setDeliveredBy(event.target.value)}
           placeholder="Nombre de quien entrega"
+          autoFocus
         />
       </label>
       {errors.deliveredBy && <p className="payment-error">{errors.deliveredBy}</p>}

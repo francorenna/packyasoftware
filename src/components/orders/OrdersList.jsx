@@ -169,6 +169,10 @@ function OrdersList({
     initialDeliveredBy: '',
     initialDeliveryNote: '',
   })
+  const [paymentQuickModal, setPaymentQuickModal] = useState({
+    isOpen: false,
+    orderId: '',
+  })
   const [collapsedSections, setCollapsedSections] = useState({
     production: false,
     ready: false,
@@ -492,6 +496,82 @@ function OrdersList({
     handleCancelDeliveryConfirmation()
   }
 
+  const handleDeliveryOverlayClick = (event) => {
+    if (event.target !== event.currentTarget) return
+    handleCancelDeliveryConfirmation()
+  }
+
+  const openPaymentQuickModal = (orderId) => {
+    setPaymentQuickModal({
+      isOpen: true,
+      orderId,
+    })
+
+    setPaymentDrafts((prevDrafts) => {
+      if (prevDrafts[orderId]) return prevDrafts
+      return {
+        ...prevDrafts,
+        [orderId]: {
+          amount: '',
+          method: paymentMethods[0],
+        },
+      }
+    })
+  }
+
+  const handleClosePaymentQuickModal = () => {
+    setPaymentQuickModal({
+      isOpen: false,
+      orderId: '',
+    })
+  }
+
+  const handlePaymentOverlayClick = (event) => {
+    if (event.target !== event.currentTarget) return
+    handleClosePaymentQuickModal()
+  }
+
+  const paymentQuickOrder = useMemo(
+    () => safeOrders.find((order) => String(order?.id ?? '') === String(paymentQuickModal.orderId ?? '')) ?? null,
+    [paymentQuickModal.orderId, safeOrders],
+  )
+
+  const paymentQuickSummary = useMemo(
+    () => (paymentQuickOrder ? getOrderFinancialSummary(paymentQuickOrder) : null),
+    [paymentQuickOrder],
+  )
+
+  const handleQuickRegisterPayment = () => {
+    const targetOrderId = String(paymentQuickModal.orderId ?? '').trim()
+    if (!targetOrderId || !paymentQuickSummary) return
+
+    const draft = paymentDrafts[targetOrderId] ?? { amount: '', method: paymentMethods[0] }
+    const amount = Number(draft.amount)
+    const remainingDebt = Number(paymentQuickSummary.remainingDebt || 0)
+
+    if (Number.isNaN(amount) || amount <= 0) return
+    if (amount > remainingDebt) return
+
+    onRegisterPayment?.(targetOrderId, {
+      amount,
+      method: draft.method,
+    })
+
+    const nextRemainingDebt = Math.max(remainingDebt - amount, 0)
+
+    setPaymentDrafts((prevDrafts) => ({
+      ...prevDrafts,
+      [targetOrderId]: {
+        amount: '',
+        method: draft.method,
+      },
+    }))
+
+    if (nextRemainingDebt <= 0) {
+      handleClosePaymentQuickModal()
+    }
+  }
+
   const deliveryConfirmTarget = useMemo(
     () => safeOrders.find((order) => String(order?.id ?? '') === String(deliveryConfirmModal.orderId ?? '')) ?? null,
     [deliveryConfirmModal.orderId, safeOrders],
@@ -785,7 +865,7 @@ function OrdersList({
                 }
 
                 if (isDeliveredWithDebt) {
-                  setExpandedOrderId(orderId)
+                  openPaymentQuickModal(orderId)
                 }
               }
 
@@ -1647,9 +1727,15 @@ function OrdersList({
           role="dialog"
           aria-modal="true"
           aria-label="Confirmar entrega del pedido"
-          onMouseDown={handleCancelDeliveryConfirmation}
+          onClick={handleDeliveryOverlayClick}
         >
-          <div className="modal-card confirm-delivery-modal-shell" onMouseDown={(event) => event.stopPropagation()}>
+          <div
+            className="modal-card confirm-delivery-modal-shell"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') handleCancelDeliveryConfirmation()
+            }}
+          >
             <h4 className="confirm-delivery-modal-title">
               Confirmar entrega {deliveryConfirmTarget ? `de ${formatOrderId(String(deliveryConfirmTarget.id ?? ''))}` : ''}
             </h4>
@@ -1657,12 +1743,114 @@ function OrdersList({
               initialDeliveryType={deliveryConfirmModal.initialDeliveryType}
               initialDeliveredBy={deliveryConfirmModal.initialDeliveredBy}
               initialDeliveryNote={deliveryConfirmModal.initialDeliveryNote}
+              showTitle={false}
               onConfirm={handleConfirmDeliveredStatus}
               onCancel={handleCancelDeliveryConfirmation}
             />
           </div>
         </div>
       )}
+
+      {paymentQuickModal.isOpen && paymentQuickOrder && paymentQuickSummary && (() => {
+        const modalOrderId = String(paymentQuickModal.orderId ?? '')
+        const modalDraft = paymentDrafts[modalOrderId] ?? { amount: '', method: paymentMethods[0] }
+        const modalEnteredAmount = Number(modalDraft.amount)
+        const modalHasAmount = modalDraft.amount !== ''
+        const modalRemainingDebt = Number(paymentQuickSummary.remainingDebt || 0)
+        const modalInvalidAmount = Number.isNaN(modalEnteredAmount) || modalEnteredAmount <= 0 || modalEnteredAmount > modalRemainingDebt
+
+        return (
+          <div
+            className="modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Cobrar saldo del pedido"
+            onClick={handlePaymentOverlayClick}
+          >
+            <div
+              className="modal-card quick-payment-modal-shell"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') handleClosePaymentQuickModal()
+              }}
+            >
+              <h4 className="confirm-delivery-modal-title">
+                Cobrar saldo de {formatOrderId(String(paymentQuickOrder.id ?? ''))}
+              </h4>
+              <div className="quick-payment-summary-grid">
+                <p>
+                  <span>Cliente</span>
+                  <strong>{String(paymentQuickOrder.clientName ?? paymentQuickOrder.client ?? 'Sin cliente')}</strong>
+                </p>
+                <p>
+                  <span>Total pagado</span>
+                  <strong>{formatCurrency(Number(paymentQuickSummary.totalPaid || 0))}</strong>
+                </p>
+                <p>
+                  <span>Deuda restante</span>
+                  <strong>{formatCurrency(modalRemainingDebt)}</strong>
+                </p>
+              </div>
+
+              <div className="payment-form">
+                <div className="payment-form-row">
+                  <input
+                    type="number"
+                    min="0"
+                    max={modalRemainingDebt}
+                    step="1"
+                    value={modalDraft.amount}
+                    onChange={(event) => updateDraft(modalOrderId, 'amount', event.target.value)}
+                    placeholder="Monto"
+                  />
+                  <select
+                    value={modalDraft.method}
+                    onChange={(event) => updateDraft(modalOrderId, 'method', event.target.value)}
+                  >
+                    {paymentMethods.map((method) => (
+                      <option key={method} value={method}>
+                        {method}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="payment-helper-row">
+                  <p className="payment-helper">Deuda restante: {formatCurrency(modalRemainingDebt)}</p>
+                  <button
+                    type="button"
+                    className="quick-fill-btn"
+                    onClick={() => updateDraft(modalOrderId, 'amount', String(modalRemainingDebt))}
+                    disabled={modalRemainingDebt <= 0}
+                  >
+                    Completar deuda
+                  </button>
+                </div>
+                {modalHasAmount && modalInvalidAmount && (
+                  <p className="payment-error">El monto no puede superar la deuda restante.</p>
+                )}
+              </div>
+
+              <div className="confirm-delivery-actions">
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={handleQuickRegisterPayment}
+                  disabled={modalRemainingDebt <= 0 || modalInvalidAmount}
+                >
+                  Agregar pago
+                </button>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={handleClosePaymentQuickModal}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </section>
   )
 }

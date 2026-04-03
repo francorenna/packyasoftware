@@ -455,6 +455,48 @@ function OrdersList({
     setExpandedOrderId((currentId) => (currentId === orderId ? null : orderId))
   }
 
+  const openDeliveryConfirmation = (orderId, order) => {
+    setDeliveryConfirmModal({
+      isOpen: true,
+      orderId,
+      initialDeliveryType: String(order?.deliveryType ?? order?.deliveredVia ?? '').trim(),
+      initialDeliveredBy: String(order?.deliveredBy ?? '').trim(),
+      initialDeliveryNote: String(order?.deliveryNote ?? order?.deliveryDetails ?? '').trim(),
+    })
+  }
+
+  const handleCancelDeliveryConfirmation = () => {
+    setDeliveryConfirmModal({
+      isOpen: false,
+      orderId: '',
+      initialDeliveryType: '',
+      initialDeliveredBy: '',
+      initialDeliveryNote: '',
+    })
+  }
+
+  const handleConfirmDeliveredStatus = (deliveryData) => {
+    const targetOrderId = String(deliveryConfirmModal.orderId ?? '').trim()
+    if (!targetOrderId) return
+
+    const safeDeliveryData = deliveryData && typeof deliveryData === 'object' ? deliveryData : {}
+
+    onUpdateOrderDelivery?.(targetOrderId, {
+      deliveryType: String(safeDeliveryData.deliveryType ?? '').trim(),
+      deliveredVia: String(safeDeliveryData.deliveryType ?? '').trim(),
+      deliveredBy: String(safeDeliveryData.deliveredBy ?? '').trim(),
+      deliveryNote: String(safeDeliveryData.deliveryNote ?? '').trim(),
+      deliveryDetails: String(safeDeliveryData.deliveryNote ?? '').trim(),
+    })
+    onUpdateOrderStatus?.(targetOrderId, 'Entregado')
+    handleCancelDeliveryConfirmation()
+  }
+
+  const deliveryConfirmTarget = useMemo(
+    () => safeOrders.find((order) => String(order?.id ?? '') === String(deliveryConfirmModal.orderId ?? '')) ?? null,
+    [deliveryConfirmModal.orderId, safeOrders],
+  )
+
   const getDraftForOrder = (orderId) =>
     paymentDrafts[orderId] ?? { amount: '', method: paymentMethods[0] }
 
@@ -738,13 +780,7 @@ function OrdersList({
                 }
 
                 if (orderStatus === 'Listo') {
-                  setDeliveryConfirmModal({
-                    isOpen: true,
-                    orderId,
-                    initialDeliveryType: String(order?.deliveryType ?? order?.deliveredVia ?? '').trim(),
-                    initialDeliveredBy: String(order?.deliveredBy ?? '').trim(),
-                    initialDeliveryNote: String(order?.deliveryNote ?? order?.deliveryDetails ?? '').trim(),
-                  })
+                  openDeliveryConfirmation(orderId, order)
                   return
                 }
 
@@ -970,35 +1006,7 @@ function OrdersList({
                   return
                 }
 
-                setDeliveryConfirmModal({
-                  isOpen: true,
-                  orderId,
-                  initialDeliveryType: String(order?.deliveryType ?? order?.deliveredVia ?? '').trim(),
-                  initialDeliveredBy: String(order?.deliveredBy ?? '').trim(),
-                  initialDeliveryNote: String(order?.deliveryNote ?? order?.deliveryDetails ?? '').trim(),
-                })
-              }
-
-              const handleCancelDeliveryConfirmation = () => {
-                setDeliveryConfirmModal((prev) => ({
-                  ...prev,
-                  isOpen: false,
-                  orderId: '',
-                }))
-              }
-
-              const handleConfirmDeliveredStatus = (deliveryData) => {
-                const safeDeliveryData = deliveryData && typeof deliveryData === 'object' ? deliveryData : {}
-
-                onUpdateOrderDelivery?.(orderId, {
-                  deliveryType: String(safeDeliveryData.deliveryType ?? '').trim(),
-                  deliveredVia: String(safeDeliveryData.deliveryType ?? '').trim(),
-                  deliveredBy: String(safeDeliveryData.deliveredBy ?? '').trim(),
-                  deliveryNote: String(safeDeliveryData.deliveryNote ?? '').trim(),
-                  deliveryDetails: String(safeDeliveryData.deliveryNote ?? '').trim(),
-                })
-                onUpdateOrderStatus?.(orderId, 'Entregado')
-                handleCancelDeliveryConfirmation()
+                openDeliveryConfirmation(orderId, order)
               }
 
               const handleUpdateOrderClient = (nextClientId) => {
@@ -1288,15 +1296,6 @@ function OrdersList({
                                 </select>
                               </strong>
                             </p>
-                            {deliveryConfirmModal.isOpen && deliveryConfirmModal.orderId === orderId && (
-                              <ConfirmDeliveryModal
-                                initialDeliveryType={deliveryConfirmModal.initialDeliveryType}
-                                initialDeliveredBy={deliveryConfirmModal.initialDeliveredBy}
-                                initialDeliveryNote={deliveryConfirmModal.initialDeliveryNote}
-                                onConfirm={handleConfirmDeliveredStatus}
-                                onCancel={handleCancelDeliveryConfirmation}
-                              />
-                            )}
                             {!order.isSample && (
                               <p>
                                 <span>Cliente</span>
@@ -1641,6 +1640,29 @@ function OrdersList({
           </tbody>
         </table>
       </div>
+
+      {deliveryConfirmModal.isOpen && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar entrega del pedido"
+          onMouseDown={handleCancelDeliveryConfirmation}
+        >
+          <div className="modal-card confirm-delivery-modal-shell" onMouseDown={(event) => event.stopPropagation()}>
+            <h4 className="confirm-delivery-modal-title">
+              Confirmar entrega {deliveryConfirmTarget ? `de ${formatOrderId(String(deliveryConfirmTarget.id ?? ''))}` : ''}
+            </h4>
+            <ConfirmDeliveryModal
+              initialDeliveryType={deliveryConfirmModal.initialDeliveryType}
+              initialDeliveredBy={deliveryConfirmModal.initialDeliveredBy}
+              initialDeliveryNote={deliveryConfirmModal.initialDeliveryNote}
+              onConfirm={handleConfirmDeliveredStatus}
+              onCancel={handleCancelDeliveryConfirmation}
+            />
+          </div>
+        </div>
+      )}
     </section>
   )
 }

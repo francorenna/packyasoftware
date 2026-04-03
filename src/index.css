@@ -112,19 +112,19 @@ input[type='number']:focus {
 .save-toast {
   position: fixed;
   top: auto;
-  right: 20px;
-  bottom: 20px;
+  right: 12px;
+  bottom: 54px;
   z-index: 1100;
   background: #ecfdf3;
   color: #166534;
   border: 1px solid #86efac;
   border-radius: 0.6rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.82rem;
+  padding: 0.38rem 0.58rem;
+  font-size: 0.76rem;
   font-weight: 600;
   box-shadow: 0 10px 20px rgba(15, 23, 42, 0.1);
   pointer-events: none;
-  max-width: min(280px, calc(100vw - 40px));
+  max-width: min(220px, calc(100vw - 24px));
 }
 
 .app-shell {
@@ -246,21 +246,36 @@ input[type='number']:focus {
 
 .save-indicator {
   position: fixed;
-  bottom: 1rem;
-  left: calc(250px + 1rem);
+  right: 12px;
+  bottom: 12px;
+  left: auto;
   z-index: 1200;
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 0.65rem;
-  padding: 0.45rem 0.65rem;
+  border-radius: 0.55rem;
+  padding: 0.28rem 0.45rem;
   text-align: left;
-  min-width: 188px;
+  min-width: 132px;
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  pointer-events: none;
+  opacity: 0.92;
+}
+
+.save-indicator-compact {
+  min-width: auto;
+  padding: 0.2rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.save-indicator-compact .save-indicator-state {
+  font-size: 0.7rem;
+  line-height: 1.1;
 }
 
 .save-indicator-state {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.73rem;
   font-weight: 700;
 }
 
@@ -280,7 +295,7 @@ input[type='number']:focus {
 .save-indicator-time {
   margin: 0.1rem 0 0;
   color: #64748b;
-  font-size: 0.74rem;
+  font-size: 0.68rem;
 }
 
 @keyframes save-pulse {
@@ -2531,8 +2546,9 @@ input[type='number']:focus {
   }
 
   .save-indicator {
-    left: 0.6rem;
+    right: 0.6rem;
     bottom: 0.6rem;
+    left: auto;
   }
 
   .global-alerts-bar {
@@ -2540,10 +2556,10 @@ input[type='number']:focus {
   }
 
   .save-toast {
-    right: 20px;
-    bottom: 20px;
+    right: 0.6rem;
+    bottom: 3.1rem;
     top: auto;
-    max-width: calc(100vw - 40px);
+    max-width: calc(100vw - 1.2rem);
   }
 
   .product-accordion-stats,

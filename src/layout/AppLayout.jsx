@@ -30,12 +30,17 @@ function AppLayout({
       : saveStatus === 'error'
         ? 'Error al guardar'
         : 'Guardado ✔'
+  const isSaveIndicatorCompact = saveStatus === 'saved'
 
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="app-content">
-        <aside className="save-indicator" role="status" aria-live="polite">
+        <aside
+          className={`save-indicator ${isSaveIndicatorCompact ? 'save-indicator-compact' : ''}`}
+          role="status"
+          aria-live="polite"
+        >
           <p
             className={`save-indicator-state ${
               saveStatus === 'saving'
@@ -47,7 +52,9 @@ function AppLayout({
           >
             {statusLabel}
           </p>
-          <p className="save-indicator-time">Último guardado: {formatSavedTime(lastSavedAt)}</p>
+          {!isSaveIndicatorCompact && (
+            <p className="save-indicator-time">Último guardado: {formatSavedTime(lastSavedAt)}</p>
+          )}
         </aside>
         <SaveToast
           key={saveToastToken}

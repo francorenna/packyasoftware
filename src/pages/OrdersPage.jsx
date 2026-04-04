@@ -10,6 +10,25 @@ const toPositiveNumber = (value) => {
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
 }
 
+const formatCurrency = (value) =>
+  new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(Number(value || 0))
+
+const getDaysSinceDateInput = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return 0
+  const [year, month, day] = value.split('-').map(Number)
+  const target = new Date(year, month - 1, day)
+  if (Number.isNaN(target.getTime())) return 0
+
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const base = new Date(target.getFullYear(), target.getMonth(), target.getDate())
+  return Math.max(0, Math.floor((today.getTime() - base.getTime()) / 86400000))
+}
+
 const getOrderTotalBoxes = (order) =>
   (Array.isArray(order?.items) ? order.items : []).reduce(
     (acc, item) => acc + toPositiveNumber(item?.quantity),
@@ -317,6 +336,86 @@ function OrdersPage({
     },
   ]
 
+  const collectionsIntelligence = useMemo(() => {
+    const safeOrders = Array.isArray(orders) ? orders : []
+    const activeOrders = safeOrders.filter(
+      (order) => !order?.isSample && order?.isArchived !== true && String(order?.status ?? '') !== 'Cancelado',
+    )
+
+    const debtRows = activeOrders
+      .map((order) => {
+        const totalPaid = (Array.isArray(order?.payments) ? order.payments : []).reduce(
+          (acc, payment) => acc + toPositiveNumber(payment?.amount),
+          0,
+        )
+        const finalTotal = toPositiveNumber(order?.total)
+        const remainingDebt = Math.max(finalTotal - totalPaid, 0)
+        const daysSinceDelivery = getDaysSinceDateInput(order?.deliveryDate)
+
+        return {
+          order,
+          totalPaid,
+          finalTotal,
+          remainingDebt,
+          daysSinceDelivery,
+        }
+      })
+      .filter((row) => String(row.order?.status ?? '') === 'Entregado' && row.remainingDebt > 0)
+
+    const totalPending = debtRows.reduce((acc, row) => acc + row.remainingDebt, 0)
+    const avgDaysToCollect = debtRows.length > 0
+      ? debtRows.reduce((acc, row) => acc + row.daysSinceDelivery, 0) / debtRows.length
+      : 0
+
+    const agingBuckets = {
+      range0_7: debtRows.filter((row) => row.daysSinceDelivery <= 7).length,
+      range8_15: debtRows.filter((row) => row.daysSinceDelivery >= 8 && row.daysSinceDelivery <= 15).length,
+      range16_30: debtRows.filter((row) => row.daysSinceDelivery >= 16 && row.daysSinceDelivery <= 30).length,
+      range31Plus: debtRows.filter((row) => row.daysSinceDelivery > 30).length,
+    }
+
+    const debtByClient = debtRows.reduce((acc, row) => {
+      const key = String(row.order?.clientId ?? '').trim() || String(row.order?.clientName ?? row.order?.client ?? 'Sin cliente').trim().toLowerCase()
+      const label = String(row.order?.clientName ?? row.order?.client ?? 'Sin cliente')
+      const current = acc[key] ?? { label, amount: 0 }
+      current.amount += row.remainingDebt
+      acc[key] = current
+      return acc
+    }, {})
+
+    const topDebtors = Object.values(debtByClient)
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5)
+
+    const paidByClient = activeOrders.reduce((acc, order) => {
+      const paid = (Array.isArray(order?.payments) ? order.payments : []).reduce(
+        (sum, payment) => sum + toPositiveNumber(payment?.amount),
+        0,
+      )
+      if (paid <= 0) return acc
+
+      const key = String(order?.clientId ?? '').trim() || String(order?.clientName ?? order?.client ?? 'Sin cliente').trim().toLowerCase()
+      const label = String(order?.clientName ?? order?.client ?? 'Sin cliente')
+      const current = acc[key] ?? { label, amount: 0 }
+      current.amount += paid
+      acc[key] = current
+      return acc
+    }, {})
+
+    const topPayers = Object.values(paidByClient)
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5)
+
+    return {
+      pendingOrders: debtRows.length,
+      totalPending,
+      avgDaysToCollect,
+      agingBuckets,
+      topDebtors,
+      topPayers,
+    }
+  }, [orders])
+
   const stockByProductId = useMemo(
     () => getStockMapByProductId(products, orders),
     [products, orders],
@@ -352,6 +451,89 @@ function OrdersPage({
                 <p className="summary-helper">{card.secondaryHelper}</p>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="dashboard-recent" aria-label="Panel de cobranza inteligente">
+          <div className="card-head">
+            <h3>Cobranza Inteligente 1.9</h3>
+            <p className="muted-label">Foco en liquidez y seguimiento de deuda activa.</p>
+          </div>
+
+          <div className="collections-kpi-grid">
+            <article className="dashboard-card">
+              <p>Deuda total activa</p>
+              <strong>{formatCurrency(collectionsIntelligence.totalPending)}</strong>
+            </article>
+            <article className="dashboard-card">
+              <p>Pedidos por cobrar</p>
+              <strong>{collectionsIntelligence.pendingOrders}</strong>
+            </article>
+            <article className="dashboard-card">
+              <p>Días promedio de cobro</p>
+              <strong>{collectionsIntelligence.avgDaysToCollect.toFixed(1)}</strong>
+            </article>
+            <article className="dashboard-card">
+              <p>Aging 30+ días</p>
+              <strong>{collectionsIntelligence.agingBuckets.range31Plus}</strong>
+            </article>
+          </div>
+
+          <div className="collections-aging-grid">
+            <article className="summary-card collections-aging-card">
+              <p className="summary-label">0-7 días</p>
+              <p className="summary-number">{collectionsIntelligence.agingBuckets.range0_7}</p>
+              <p className="summary-helper">Pedidos</p>
+            </article>
+            <article className="summary-card collections-aging-card">
+              <p className="summary-label">8-15 días</p>
+              <p className="summary-number">{collectionsIntelligence.agingBuckets.range8_15}</p>
+              <p className="summary-helper">Pedidos</p>
+            </article>
+            <article className="summary-card collections-aging-card">
+              <p className="summary-label">16-30 días</p>
+              <p className="summary-number">{collectionsIntelligence.agingBuckets.range16_30}</p>
+              <p className="summary-helper">Pedidos</p>
+            </article>
+            <article className="summary-card collections-aging-card">
+              <p className="summary-label">31+ días</p>
+              <p className="summary-number">{collectionsIntelligence.agingBuckets.range31Plus}</p>
+              <p className="summary-helper">Pedidos</p>
+            </article>
+          </div>
+
+          <div className="ranking-grid collections-ranking-grid">
+            <article className="ranking-panel">
+              <h4>Top deudores</h4>
+              <ul className="collections-ranking-list">
+                {collectionsIntelligence.topDebtors.length > 0 ? (
+                  collectionsIntelligence.topDebtors.map((row, index) => (
+                    <li key={`debtor-${index}`}>
+                      <span>{row.label}</span>
+                      <strong>{formatCurrency(row.amount)}</strong>
+                    </li>
+                  ))
+                ) : (
+                  <li><span>Sin deuda activa</span><strong>{formatCurrency(0)}</strong></li>
+                )}
+              </ul>
+            </article>
+
+            <article className="ranking-panel">
+              <h4>Top pagadores</h4>
+              <ul className="collections-ranking-list">
+                {collectionsIntelligence.topPayers.length > 0 ? (
+                  collectionsIntelligence.topPayers.map((row, index) => (
+                    <li key={`payer-${index}`}>
+                      <span>{row.label}</span>
+                      <strong>{formatCurrency(row.amount)}</strong>
+                    </li>
+                  ))
+                ) : (
+                  <li><span>Sin pagos registrados</span><strong>{formatCurrency(0)}</strong></li>
+                )}
+              </ul>
+            </article>
           </div>
         </section>
 

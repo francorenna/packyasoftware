@@ -9,6 +9,7 @@ const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleOrderStatuses = ['Pendiente', 'Lista']
 const deliveryMethods = ['Presencial', 'Envío', 'Otro']
+const COLLAPSED_SECTIONS_STORAGE_KEY = 'packya_orders_collapsed_sections_v1'
 
 const toPositiveNumber = (value) => {
   const parsed = Number(value)
@@ -311,6 +312,41 @@ function OrdersList({
     [safeProducts],
   )
 
+  const sendPaymentReminder = (order, remainingDebt) => {
+    if (!order || typeof order !== 'object') return
+
+    const clientById = clientsById[String(order.clientId ?? '')]
+    const clientNameKey = String(order.clientName ?? order.client ?? '')
+      .trim()
+      .toLowerCase()
+    const clientByName = clientsByName[clientNameKey]
+    const targetClient = clientById ?? clientByName ?? null
+    const clientPhone = normalizePhone(targetClient?.phone)
+
+    if (!clientPhone) {
+      window.alert('Este cliente no tiene número de WhatsApp registrado.')
+      return
+    }
+
+    const orderId = String(order.id ?? '')
+    const clientName = String(targetClient?.name ?? order?.clientName ?? order?.client ?? 'Cliente')
+    const safeDebt = Math.max(Number(remainingDebt || 0), 0)
+    const lines = [
+      `Hola ${clientName} 👋`,
+      '',
+      `Te recordamos que tenés un saldo pendiente de ${formatCurrency(safeDebt)}.`,
+      `Pedido: ${formatOrderId(orderId)}`,
+      `Fecha de entrega: ${formatDate(order.deliveryDate)}`,
+      '',
+      'Cualquier consulta, estamos a disposición.',
+      'PACKYA',
+    ]
+
+    const text = encodeURIComponent(lines.join('\n'))
+    const url = `https://wa.me/${clientPhone}?text=${text}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   const clientsWithDebt = (() => {
     const debtByClientKey = safeOrders.reduce((acc, order) => {
       if (order?.isSample) return acc
@@ -462,6 +498,37 @@ function OrdersList({
       [sectionKey]: false,
     }))
   }, [initialExpandedOrderId, orderFinancialMap, safeOrders])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      const rawValue = window.localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY)
+      if (!rawValue) return
+
+      const parsed = JSON.parse(rawValue)
+      if (!parsed || typeof parsed !== 'object') return
+
+      setCollapsedSections((prev) => ({
+        production: Boolean(parsed.production ?? prev.production),
+        ready: Boolean(parsed.ready ?? prev.ready),
+        collections: Boolean(parsed.collections ?? prev.collections),
+        cancelled: Boolean(parsed.cancelled ?? prev.cancelled),
+      }))
+    } catch {
+      // Ignore malformed local storage content.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      window.localStorage.setItem(COLLAPSED_SECTIONS_STORAGE_KEY, JSON.stringify(collapsedSections))
+    } catch {
+      // Ignore storage quota issues.
+    }
+  }, [collapsedSections])
 
   const toggleSection = (sectionKey) => {
     setCollapsedSections((prev) => ({
@@ -1204,6 +1271,18 @@ function OrdersList({
                             {quickActionLabel}
                           </button>
                         )}
+                        {isDeliveredWithDebt && (
+                          <button
+                            type="button"
+                            className="order-reminder-btn"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              sendPaymentReminder(order, remainingDebt)
+                            }}
+                          >
+                            📩 Recordar
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1856,6 +1935,13 @@ function OrdersList({
               </div>
 
               <div className="confirm-delivery-actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => sendPaymentReminder(paymentQuickOrder, modalRemainingDebt)}
+                >
+                  📩 Recordar cliente
+                </button>
                 <button
                   type="button"
                   className="primary-btn"

@@ -592,6 +592,50 @@ input[type='number']:focus {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
 }
 
+.collections-kpi-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.collections-aging-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.65rem;
+}
+
+.collections-aging-card {
+  text-align: center;
+}
+
+.collections-ranking-grid {
+  margin-top: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.collections-ranking-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.collections-ranking-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: #334155;
+}
+
+.collections-ranking-list strong {
+  color: #0f172a;
+}
+
 .finance-controls {
   padding: 0.9rem 1rem;
 }

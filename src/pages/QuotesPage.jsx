@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
 import { getQuoteEffectiveStatus } from '../state/useQuotesState'
 import { generateQuotePDF } from '../utils/pdf'
+import useAppDialog from '../hooks/useAppDialog'
 
 const quoteStatuses = ['Pendiente', 'Aceptado', 'Rechazado', 'Vencido']
 const deliveryTypes = ['Retiro en fábrica', 'Envío']
@@ -144,6 +145,8 @@ function QuotesPage({
   const [convertClientName, setConvertClientName] = useState('')
   const [convertClientPhone, setConvertClientPhone] = useState('')
   const [convertClientAddress, setConvertClientAddress] = useState('')
+
+  const { dialogNode, appAlert } = useAppDialog()
 
   const subtotal = useMemo(
     () =>
@@ -496,34 +499,34 @@ function QuotesPage({
 
     if (submitMode === 'pdf') {
       generateQuotePDF(created).catch(() => {
-        window.alert('No se pudo generar el PDF del presupuesto.')
+        void appAlert('No se pudo generar el PDF del presupuesto.')
       })
     }
   }
 
-  const executeConvertQuote = (quote, manualClientData = null) => {
+  const executeConvertQuote = async (quote, manualClientData = null) => {
     const result = onConvertQuoteToOrder?.({
       quote,
       manualClientData,
     })
 
     if (!result?.orderId) {
-      window.alert('No se pudo convertir el presupuesto a pedido.')
+      await appAlert('No se pudo convertir el presupuesto a pedido.')
       return
     }
 
-    window.alert(`Presupuesto convertido correctamente a pedido ${result.orderId}.`)
+    await appAlert(`Presupuesto convertido correctamente a pedido ${result.orderId}.`)
   }
 
-  const handleRequestConvertQuote = (quote) => {
+  const handleRequestConvertQuote = async (quote) => {
     const effectiveStatus = getQuoteEffectiveStatus(quote)
     if (effectiveStatus === 'Vencido') {
-      window.alert('No se puede convertir un presupuesto vencido.')
+      await appAlert('No se puede convertir un presupuesto vencido.')
       return
     }
 
     if (String(quote.status ?? '') === 'Aceptado') {
-      window.alert('Este presupuesto ya fue aceptado/conversión realizada.')
+      await appAlert('Este presupuesto ya fue aceptado/conversión realizada.')
       return
     }
 
@@ -539,7 +542,7 @@ function QuotesPage({
     setConvertClientAddress('')
   }
 
-  const handleConfirmConvertManualClient = (event) => {
+  const handleConfirmConvertManualClient = async (event) => {
     event.preventDefault()
 
     if (!convertModalQuote) return
@@ -549,7 +552,7 @@ function QuotesPage({
     const address = String(convertClientAddress ?? '').trim()
 
     if (!name || !phone) {
-      window.alert('Nombre y teléfono son obligatorios para convertir el presupuesto.')
+      await appAlert('Nombre y teléfono son obligatorios para convertir el presupuesto.')
       return
     }
 
@@ -683,7 +686,7 @@ function QuotesPage({
 
     const normalizedItems = normalizeQuoteItemsFromDraft(draft.items)
     if (normalizedItems.length === 0) {
-      window.alert('Completá al menos un ítem válido para guardar el presupuesto.')
+      void appAlert('Completá al menos un ítem válido para guardar el presupuesto.')
       return
     }
 
@@ -808,7 +811,7 @@ function QuotesPage({
                               className="quick-fill-btn"
                               onClick={() => {
                                 generateQuotePDF(quote).catch(() => {
-                                  window.alert('No se pudo generar el PDF del presupuesto.')
+                                  void appAlert('No se pudo generar el PDF del presupuesto.')
                                 })
                               }}
                             >
@@ -1369,6 +1372,7 @@ function QuotesPage({
           </div>
         </div>
       )}
+      {dialogNode}
     </section>
   )
 }

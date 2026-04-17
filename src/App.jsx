@@ -54,6 +54,8 @@ function App() {
     updateOrderUrgency,
     convertSampleToRealOrder,
     deleteCancelledOrder,
+    reopenArchivedOrderAsNew,
+    deleteArchivedOrder,
   } = useOrdersState()
   const {
     products,
@@ -571,7 +573,9 @@ function App() {
                 onUpdateOrderUrgency={updateOrderUrgency}
                 onDeleteCancelledOrder={deleteCancelledOrder}
                 onCreateClient={handleCreateClient}
+                onSaveClient={upsertClient}
                 onMarkProductAsUsed={markProductAsUsed}
+                onCreateManualPurchaseList={handleCreateList}
               />
             }
           />
@@ -595,9 +599,11 @@ function App() {
               <ArchivedOrdersPage
                 orders={orders}
                 onReopenOrder={reopenOrder}
+                onReopenOrderAsNew={reopenArchivedOrderAsNew}
                 onCreateClient={upsertClient}
                 onConvertSampleToRealOrder={convertSampleToRealOrder}
                 onDuplicateOrder={duplicateOrder}
+                onDeleteArchivedOrder={deleteArchivedOrder}
               />
             }
           />

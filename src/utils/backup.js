@@ -186,14 +186,6 @@ export async function importBackup(file) {
 
   ensureValidBackup(parsed)
 
-  const shouldContinue = window.confirm(
-    'Se reemplazarán todos los datos actuales por el respaldo seleccionado. ¿Deseas continuar?',
-  )
-
-  if (!shouldContinue) {
-    return { cancelled: true }
-  }
-
   localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(parsed.data.orders))
   localStorage.setItem(STORAGE_KEYS.products, JSON.stringify(parsed.data.products))
   localStorage.setItem(STORAGE_KEYS.clients, JSON.stringify(parsed.data.clients))

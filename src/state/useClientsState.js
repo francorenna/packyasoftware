@@ -3,7 +3,45 @@ import { useEffect, useState } from 'react'
 const CLIENTS_STORAGE_KEY = 'packya_clients'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
 
+const CRITICAL_OBSERVATION_REGEX = /(⚠|siempre|revisar|urgente|especial|no olvidar|problema)/i
+
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
+
+const normalizeObservationEntry = (entry, index = 0) => {
+  const rawText = typeof entry === 'string' ? entry : entry?.text
+  const text = String(rawText ?? '').trim()
+  if (!text) return null
+
+  const createdAt = String(entry?.createdAt ?? new Date().toISOString())
+  const isCritical =
+    typeof entry?.isCritical === 'boolean'
+      ? entry.isCritical
+      : CRITICAL_OBSERVATION_REGEX.test(text)
+
+  return {
+    id: String(entry?.id ?? `OBS-${Date.now()}-${index}`),
+    text,
+    createdAt,
+    isCritical,
+  }
+}
+
+const normalizeClientObservations = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry, index) => normalizeObservationEntry(entry, index))
+      .filter(Boolean)
+  }
+
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return []
+    const normalized = normalizeObservationEntry(text, 0)
+    return normalized ? [normalized] : []
+  }
+
+  return []
+}
 
 const initialClients = [
   {
@@ -34,6 +72,7 @@ const normalizeClient = (client, index) => {
     email: String(client.email ?? '').trim(),
     address: String(client.address ?? '').trim(),
     notes: String(client.notes ?? '').trim(),
+    observations: normalizeClientObservations(client.observations),
     createdAt: String(client.createdAt ?? new Date().toISOString()),
   }
 }
@@ -87,37 +126,52 @@ function useClientsState() {
 
   const upsertClient = (clientData) => {
     const safeClientData = clientData ?? {}
-    const name = String(safeClientData.name ?? '').trim()
-    if (!name) return null
-
-    const incomingId = String(safeClientData.id ?? '')
-    const existingClient = clients.find((client) => client.id === incomingId)
-
-    const normalizedClientBase = {
-      id: incomingId || `CLI-${Date.now()}`,
-      name,
-      phone: normalizePhone(safeClientData.phone),
-      email: String(safeClientData.email ?? '').trim(),
-      address: String(safeClientData.address ?? '').trim(),
-      notes: String(safeClientData.notes ?? '').trim(),
-    }
-
-    const normalizedClient = {
-      ...normalizedClientBase,
-      createdAt: existingClient?.createdAt ?? new Date().toISOString(),
-    }
+    const incomingId = String(safeClientData.id ?? '').trim()
+    let savedClient = null
 
     setClients((prevClients) => {
-      const existing = prevClients.find((client) => client.id === normalizedClient.id)
+      const existing = prevClients.find((client) => String(client.id) === incomingId)
+      const resolvedName = String(safeClientData.name ?? existing?.name ?? '').trim()
+      if (!resolvedName) return prevClients
 
-      if (!existing) return [normalizedClient, ...prevClients]
+      const resolvedId = incomingId || `CLI-${Date.now()}`
+      const hasPhone = Object.prototype.hasOwnProperty.call(safeClientData, 'phone')
+      const hasEmail = Object.prototype.hasOwnProperty.call(safeClientData, 'email')
+      const hasAddress = Object.prototype.hasOwnProperty.call(safeClientData, 'address')
+      const hasNotes = Object.prototype.hasOwnProperty.call(safeClientData, 'notes')
+      const hasObservations = Object.prototype.hasOwnProperty.call(safeClientData, 'observations')
+
+      const nextClient = {
+        id: resolvedId,
+        name: resolvedName,
+        phone: hasPhone
+          ? normalizePhone(safeClientData.phone)
+          : String(existing?.phone ?? ''),
+        email: hasEmail
+          ? String(safeClientData.email ?? '').trim()
+          : String(existing?.email ?? ''),
+        address: hasAddress
+          ? String(safeClientData.address ?? '').trim()
+          : String(existing?.address ?? ''),
+        notes: hasNotes
+          ? String(safeClientData.notes ?? '').trim()
+          : String(existing?.notes ?? ''),
+        observations: hasObservations
+          ? normalizeClientObservations(safeClientData.observations)
+          : normalizeClientObservations(existing?.observations),
+        createdAt: String(existing?.createdAt ?? new Date().toISOString()),
+      }
+
+      savedClient = nextClient
+
+      if (!existing) return [nextClient, ...prevClients]
 
       return prevClients.map((client) =>
-        client.id === normalizedClient.id ? normalizedClient : client,
+        client.id === nextClient.id ? nextClient : client,
       )
     })
 
-    return normalizedClient
+    return savedClient
   }
 
   const deleteClient = (clientId) => {

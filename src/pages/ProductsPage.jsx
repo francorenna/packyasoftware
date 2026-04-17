@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { PRODUCT_CATEGORIES } from '../state/useProductsState'
 import { calculateStockSnapshot } from '../utils/stock'
+import useAppDialog from '../hooks/useAppDialog'
+import SearchInput from '../components/SearchInput'
 
 const createInitialForm = () => ({
   name: '',
@@ -160,6 +162,7 @@ function ProductsPage({
 }) {
   const [form, setForm] = useState(createInitialForm())
   const [isFormModalOpen, setIsFormModalOpen] = useState(false)
+  const [productSearchInput, setProductSearchInput] = useState('')
   const [productSearchQuery, setProductSearchQuery] = useState('')
   const [expandedProductId, setExpandedProductId] = useState(null)
   const [quickDrafts, setQuickDrafts] = useState({})
@@ -168,6 +171,8 @@ function ProductsPage({
   const [adjustment, setAdjustment] = useState(createInitialAdjustment())
   const [imageUploadError, setImageUploadError] = useState('')
   const [previewImage, setPreviewImage] = useState({ isOpen: false, src: '', name: '' })
+
+  const { dialogNode, appConfirm } = useAppDialog()
 
   const stockRows = useMemo(
     () => calculateStockSnapshot(products, orders),
@@ -412,13 +417,13 @@ function ProductsPage({
     const productId = String(product?.id ?? '')
     if (!productId) return
 
-    const confirmed = window.confirm(`¿Eliminar el producto ${product.name}? Esta acción no se puede deshacer.`)
-    if (!confirmed) return
-
-    onDeleteProduct?.(productId)
-    closeQuickEdit(productId)
-    setHistoryProductId((currentId) => (currentId === productId ? null : currentId))
-    setAdjustingProductId((currentId) => (currentId === productId ? null : currentId))
+    void appConfirm(`¿Eliminar el producto ${product.name}? Esta acción no se puede deshacer.`).then((confirmed) => {
+      if (!confirmed) return
+      onDeleteProduct?.(productId)
+      closeQuickEdit(productId)
+      setHistoryProductId((currentId) => (currentId === productId ? null : currentId))
+      setAdjustingProductId((currentId) => (currentId === productId ? null : currentId))
+    })
   }
 
   const toggleExpandedProduct = (product) => {
@@ -447,20 +452,24 @@ function ProductsPage({
     if (!adjustingProduct || !isAdjustmentAmountValid || !hasReason) return
 
     const direction = adjustmentAmount > 0 ? '+' : ''
-    const confirmed = window.confirm(
-      `¿Aplicar ajuste ${direction}${adjustmentAmount} al producto ${adjustingProduct.name}?`,
-    )
-    if (!confirmed) return
+    void appConfirm(`¿Aplicar ajuste ${direction}${adjustmentAmount} al producto ${adjustingProduct.name}?`).then((confirmed) => {
+      if (!confirmed) return
 
-    if (projectedStock < 0) {
-      const secondConfirmation = window.confirm(
-        'Este ajuste dejará el stock total en negativo. ¿Confirmás continuar?',
-      )
-      if (!secondConfirmation) return
-    }
+      const applyAdjustment = () => {
+        onAdjustStock(adjustingProduct.id, adjustmentAmount, adjustment.reason.trim(), 'Ajuste')
+        closeAdjustPanel()
+      }
 
-    onAdjustStock(adjustingProduct.id, adjustmentAmount, adjustment.reason.trim(), 'Ajuste')
-    closeAdjustPanel()
+      if (projectedStock < 0) {
+        void appConfirm('Este ajuste dejará el stock total en negativo. ¿Confirmás continuar?').then((secondConfirmation) => {
+          if (!secondConfirmation) return
+          applyAdjustment()
+        })
+        return
+      }
+
+      applyAdjustment()
+    })
   }
 
   const toggleHistory = (productId) => {
@@ -488,11 +497,12 @@ function ProductsPage({
           </div>
 
           <div className="products-panel-toolbar">
-            <input
-              type="text"
-              value={productSearchQuery}
-              onChange={(event) => setProductSearchQuery(event.target.value)}
+            <SearchInput
+              value={productSearchInput}
+              onValueChange={setProductSearchInput}
+              onDebouncedChange={setProductSearchQuery}
               placeholder="Buscar producto por nombre, categoría o medida..."
+              delay={220}
             />
             <span className="muted-label">
               {filteredGroupedProducts.reduce((acc, group) => acc + group.items.length, 0)} resultados
@@ -972,6 +982,7 @@ function ProductsPage({
           </div>
         </section>
       )}
+      {dialogNode}
     </section>
   )
 }

@@ -146,7 +146,66 @@ const getMonthlyProductionClosure = (orders, monthKey) => {
   )
 }
 
+const getPendingProductionNeeds = (orders, products) => {
+  const safeOrders = Array.isArray(orders) ? orders : []
+  const safeProducts = Array.isArray(products) ? products : []
+
+  const productNameById = safeProducts.reduce((acc, product) => {
+    const productId = String(product?.id ?? '').trim()
+    if (!productId) return acc
+
+    acc[productId] = String(product?.name ?? '').trim()
+    return acc
+  }, {})
+
+  const totalsByProductKey = {}
+
+  safeOrders.forEach((order) => {
+    if (order?.isArchived === true) return
+    if (order?.isSample === true) return
+
+    const status = String(order?.status ?? '')
+    if (status !== 'Pendiente' && status !== 'En Proceso') return
+
+    const items = Array.isArray(order?.items) ? order.items : []
+
+    items.forEach((item) => {
+      const quantity = toPositiveNumber(item?.quantity)
+      if (quantity <= 0) return
+
+      const productId = String(item?.productId ?? '').trim()
+      const rawName = String(item?.productName ?? item?.product ?? '').trim()
+      const fallbackName = productId ? String(productNameById[productId] ?? '').trim() : ''
+      const productName = rawName || fallbackName || 'Producto sin nombre'
+
+      const productKey = productId || `name:${productName.toLowerCase()}`
+      const current = totalsByProductKey[productKey] ?? {
+        productId,
+        productName,
+        quantity: 0,
+      }
+
+      current.quantity += quantity
+      if (!current.productName) {
+        current.productName = productName
+      }
+
+      totalsByProductKey[productKey] = current
+    })
+  })
+
+  return Object.values(totalsByProductKey).sort((a, b) => {
+    const quantityDiff = Number(b.quantity || 0) - Number(a.quantity || 0)
+    if (quantityDiff !== 0) return quantityDiff
+
+    return String(a.productName ?? '').localeCompare(String(b.productName ?? ''), 'es', {
+      sensitivity: 'base',
+    })
+  })
+}
+
 export {
   getDashboardProductionMetrics,
   getMonthlyProductionClosure,
+  getPendingProductionNeeds,
 }

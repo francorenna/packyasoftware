@@ -1,6 +1,8 @@
 import { Fragment, useMemo, useState } from 'react'
 import { getOrderFinancialSummary } from '../utils/finance'
 import { generateClientAccountPDF } from '../utils/reportsPdf'
+import useAppDialog from '../hooks/useAppDialog'
+import SearchInput from '../components/SearchInput'
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -23,11 +25,61 @@ const createInitialForm = () => ({
   email: '',
   address: '',
   notes: '',
+  observationsInput: '',
 })
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
 const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
 const HIGH_DEBT_THRESHOLD = 250000
+const CRITICAL_OBSERVATION_REGEX = /(⚠|siempre|revisar|urgente|especial|no olvidar|problema)/i
+
+const normalizeObservationEntry = (entry, index = 0) => {
+  const rawText = typeof entry === 'string' ? entry : entry?.text
+  const text = String(rawText ?? '').trim()
+  if (!text) return null
+
+  return {
+    id: String(entry?.id ?? `OBS-${Date.now()}-${index}`),
+    text,
+    createdAt: String(entry?.createdAt ?? new Date().toISOString()),
+    isCritical:
+      typeof entry?.isCritical === 'boolean'
+        ? entry.isCritical
+        : CRITICAL_OBSERVATION_REGEX.test(text),
+  }
+}
+
+const getClientObservations = (client) => {
+  const source = Array.isArray(client?.observations) ? client.observations : []
+  return source
+    .map((entry, index) => normalizeObservationEntry(entry, index))
+    .filter(Boolean)
+}
+
+const serializeObservationsToText = (observations) =>
+  observations.map((entry) => String(entry?.text ?? '').trim()).filter(Boolean).join('\n')
+
+const parseObservationLines = (rawValue, existingObservations = []) => {
+  const lines = String(rawValue ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const usedIds = new Set()
+
+  return lines.map((line, index) => {
+    const existing = existingObservations.find(
+      (entry) => String(entry?.text ?? '').trim() === line && !usedIds.has(String(entry?.id ?? '')),
+    )
+
+    if (existing?.id) {
+      usedIds.add(String(existing.id))
+      return normalizeObservationEntry(existing, index)
+    }
+
+    return normalizeObservationEntry({ text: line }, index)
+  }).filter(Boolean)
+}
 
 const getPaymentStatus = (paid, balance) => {
   const safePaid = Number(paid) || 0
@@ -118,6 +170,7 @@ function ClientsPage({
   const [form, setForm] = useState(createInitialForm())
   const [editingId, setEditingId] = useState(null)
   const [expandedClientId, setExpandedClientId] = useState(null)
+  const [searchTermInput, setSearchTermInput] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [listFilter, setListFilter] = useState('all')
   const [paymentDraft, setPaymentDraft] = useState({ orderId: '', amount: '', method: paymentMethods[0], note: '' })
@@ -126,6 +179,8 @@ function ClientsPage({
 
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
   const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
+
+  const { dialogNode, appAlert, appConfirm } = useAppDialog()
 
   const statsMap = useMemo(() => {
     const map = safeClients.reduce((acc, client) => {
@@ -203,13 +258,13 @@ function ClientsPage({
     setForm((prev) => ({ ...prev, [field]: value }))
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
     if (!form.name.trim()) return
 
     const normalizedPhone = normalizePhone(form.phone)
     if (normalizedPhone && !normalizedPhone.startsWith('549')) {
-      window.alert('Advertencia: el teléfono debería comenzar con 549 (formato internacional).')
+      await appAlert('Advertencia: el teléfono debería comenzar con 549 (formato internacional).')
     }
 
     const saved = onSaveClient({
@@ -219,6 +274,10 @@ function ClientsPage({
       email: String(form.email ?? '').trim(),
       address: form.address,
       notes: form.notes,
+      observations: parseObservationLines(
+        form.observationsInput,
+        editingId ? getClientObservations(safeClients.find((client) => client.id === editingId)) : [],
+      ),
     })
 
     if (saved?.id) {
@@ -239,21 +298,22 @@ function ClientsPage({
       email: client.email,
       address: client.address,
       notes: client.notes,
+      observationsInput: serializeObservationsToText(getClientObservations(client)),
     })
   }
 
-  const handleDelete = (client) => {
+  const handleDelete = async (client) => {
     const stats = statsMap[client.id]
     const activeOrders = stats?.activeOrdersCount ?? 0
 
     if (activeOrders > 0) {
-      const warningAccepted = window.confirm(
+      const warningAccepted = await appConfirm(
         `Este cliente tiene ${activeOrders} pedido(s) activo(s). ¿Querés eliminarlo igualmente?`,
       )
       if (!warningAccepted) return
     }
 
-    const confirmed = window.confirm(`¿Eliminar cliente ${client.name}?`)
+    const confirmed = await appConfirm(`¿Eliminar cliente ${client.name}?`)
     if (!confirmed) return
 
     onDeleteClient(client.id)
@@ -378,7 +438,7 @@ function ClientsPage({
         scopeLabel: expandedClient.name,
       })
     } catch {
-      window.alert('No se pudo generar el estado de cuenta del cliente.')
+      void appAlert('No se pudo generar el estado de cuenta del cliente.')
     }
   }
 
@@ -437,6 +497,14 @@ function ClientsPage({
                 onChange={(event) => handleInput('notes', event.target.value)}
               />
             </label>
+            <label>
+              Observaciones de cliente (una por línea)
+              <textarea
+                value={form.observationsInput}
+                onChange={(event) => handleInput('observationsInput', event.target.value)}
+                placeholder={'Ej: ⚠ revisar diseño SIEMPRE\nHorario preferido: tarde'}
+              />
+            </label>
 
             <div className="product-actions">
               {editingId && (
@@ -457,11 +525,12 @@ function ClientsPage({
           </div>
 
           <div className="clients-toolbar">
-            <input
-              type="text"
+            <SearchInput
+              value={searchTermInput}
+              onValueChange={setSearchTermInput}
+              onDebouncedChange={setSearchTerm}
               placeholder="Buscar por nombre o teléfono"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
+              delay={220}
             />
 
             <div className="list-filters" role="group" aria-label="Filtrar clientes">
@@ -506,6 +575,8 @@ function ClientsPage({
                   const stats = statsMap[client.id]
                   const isExpanded = expandedClientId === client.id
                   const hasHighDebt = Number(stats?.totalPendiente ?? 0) > HIGH_DEBT_THRESHOLD
+                  const clientObservations = getClientObservations(client)
+                  const hasCriticalObservations = clientObservations.some((entry) => Boolean(entry?.isCritical))
 
                   return (
                     <Fragment key={client.id}>
@@ -518,6 +589,11 @@ function ClientsPage({
                           >
                             {client.name}
                           </button>
+                          {hasCriticalObservations && (
+                            <span className="client-special-badge" style={{ marginLeft: 8 }}>
+                              ⚠ Cliente especial
+                            </span>
+                          )}
                         </td>
                         <td>{client.phone || '-'}</td>
                         <td>{client.email || '-'}</td>
@@ -562,6 +638,20 @@ function ClientsPage({
                                   <p><strong>Email:</strong> {client.email || '-'}</p>
                                   <p><strong>Dirección:</strong> {client.address || '-'}</p>
                                   <p><strong>Notas:</strong> {client.notes || '-'}</p>
+                                  <p>
+                                    <strong>Observaciones:</strong>
+                                  </p>
+                                  {clientObservations.length > 0 ? (
+                                    <ul className="client-observations-inline-list">
+                                      {clientObservations.map((entry) => (
+                                        <li key={entry.id} className={entry.isCritical ? 'client-observation-item-critical' : ''}>
+                                          {entry.text}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <p>-</p>
+                                  )}
                                 </div>
 
                                 <div className="client-summary-cards">
@@ -790,6 +880,7 @@ function ClientsPage({
           </div>
         </section>
       </div>
+      {dialogNode}
     </section>
   )
 }

@@ -10,6 +10,7 @@ import {
   generateStockStatusPDF,
 } from '../utils/reportsPdf'
 import { getStockMapByProductId } from '../utils/stock'
+import useAppDialog from '../hooks/useAppDialog'
 
 const CATEGORY_OPTIONS = [
   { key: 'CAJA', label: 'CAJAS' },
@@ -125,6 +126,8 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
     rows: [],
   })
   const [hasShownMissingCostsWarning, setHasShownMissingCostsWarning] = useState(false)
+
+  const { dialogNode, appAlert } = useAppDialog()
   const [accountScope, setAccountScope] = useState('all')
   const [selectedAccountClientKey, setSelectedAccountClientKey] = useState('')
   const [rankingPeriod, setRankingPeriod] = useState('all')
@@ -567,7 +570,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
 
   const handleGeneratePriceList = () => {
     if (selectedProducts.length === 0) {
-      window.alert('No hay productos seleccionados para generar la lista de precios.')
+      void appAlert('No hay productos seleccionados para generar la lista de precios.')
       return
     }
 
@@ -622,7 +625,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
     const finalRows = [...missingPriceModal.readyRows, ...solvedRows]
 
     if (finalRows.length === 0) {
-      window.alert('No hay productos con precio válido para generar el PDF.')
+      void appAlert('No hay productos con precio válido para generar el PDF.')
       return
     }
 
@@ -715,7 +718,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
 
     if (missingRows.length > 0) {
       if (!hasShownMissingCostsWarning) {
-        window.alert('⚠ Producto sin costo o precio cargado')
+        void appAlert('⚠ Producto sin costo o precio cargado')
         setHasShownMissingCostsWarning(true)
       }
 
@@ -1254,6 +1257,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
           </div>
         </div>
       )}
+      {dialogNode}
     </section>
   )
 }

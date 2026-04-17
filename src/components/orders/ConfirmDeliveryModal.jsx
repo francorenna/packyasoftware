@@ -1,6 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 const deliveryTypeOptions = ['Retira en fábrica', 'Entrega propia', 'Envío por encomienda']
+
+const shouldTraceModalDebug = () => {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return false
+
+  try {
+    return window.localStorage.getItem('packya_modal_debug') === '1'
+  } catch {
+    return false
+  }
+}
 
 function ConfirmDeliveryModal({
   initialDeliveryType,
@@ -16,15 +26,52 @@ function ConfirmDeliveryModal({
   const [errors, setErrors] = useState({})
   const deliveredByInputRef = useRef(null)
 
+  const focusDeliveredByInput = useCallback(async () => {
+    // Retry DOM focus briefly in case the modal just mounted.
+    await new Promise((resolve) => window.setTimeout(resolve, 30))
+
+    let retries = 0
+    const maxRetries = 8
+
+    const tryFocus = () => {
+      const input = deliveredByInputRef.current
+      if (!input) return
+
+      input.focus({ preventScroll: true })
+
+      if (document.activeElement === input) {
+        input.select()
+        return
+      }
+
+      retries += 1
+      if (retries < maxRetries) {
+        window.setTimeout(tryFocus, 30)
+      }
+    }
+
+    tryFocus()
+  }, [])
+
   useEffect(() => {
     const focusTimeoutId = window.setTimeout(() => {
-      deliveredByInputRef.current?.focus()
-    }, 40)
+      void focusDeliveredByInput()
+    }, 10)
 
     return () => {
       window.clearTimeout(focusTimeoutId)
     }
-  }, [])
+  }, [focusDeliveredByInput])
+
+  useEffect(() => {
+    if (!shouldTraceModalDebug()) return
+
+    console.log('[confirm-delivery-modal] render', {
+      deliveryType,
+      deliveredBy,
+      deliveryNoteLength: String(deliveryNote ?? '').length,
+    })
+  }, [deliveryNote, deliveredBy, deliveryType])
 
   const handleConfirm = () => {
     const nextErrors = {}
@@ -55,17 +102,27 @@ function ConfirmDeliveryModal({
 
       <label>
         Tipo de entrega
-        <select
-          value={deliveryType}
-          onChange={(event) => setDeliveryType(event.target.value)}
-        >
-          <option value="">Seleccionar tipo</option>
-          {deliveryTypeOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+        <div className="confirm-delivery-options" role="radiogroup" aria-label="Tipo de entrega">
+          {deliveryTypeOptions.map((option) => {
+            const isSelected = deliveryType === option
+
+            return (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                className={`confirm-delivery-option-btn ${isSelected ? 'confirm-delivery-option-btn-active' : ''}`}
+                onClick={() => {
+                  setDeliveryType(option)
+                  focusDeliveredByInput()
+                }}
+              >
+                {option}
+              </button>
+            )
+          })}
+        </div>
       </label>
       {errors.deliveryType && <p className="payment-error">{errors.deliveryType}</p>}
 

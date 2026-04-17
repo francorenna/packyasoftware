@@ -5,6 +5,7 @@ import {
   importBackup,
   readBackupPreview,
 } from '../utils/backup'
+import useAppDialog from '../hooks/useAppDialog'
 
 const formatDate = (value) => {
   if (!value) return 'Sin fecha'
@@ -32,9 +33,11 @@ function SettingsPage() {
   const [backupPreview, setBackupPreview] = useState(null)
   const currentCounts = getCurrentBackupCounts()
 
-  const handleExport = () => {
+  const { dialogNode, appAlert, appConfirm } = useAppDialog()
+
+  const handleExport = async () => {
     const fileName = exportBackup()
-    window.alert(`Respaldo exportado correctamente: ${fileName}`)
+    await appAlert(`Respaldo exportado correctamente: ${fileName}`)
   }
 
   const handleClickImport = () => {
@@ -52,7 +55,7 @@ function SettingsPage() {
       setBackupPreview(preview)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo importar el respaldo.'
-      window.alert(message)
+      void appAlert(message)
       setSelectedFile(null)
       setBackupPreview(null)
     }
@@ -61,11 +64,14 @@ function SettingsPage() {
   const handleConfirmRestore = async () => {
     if (!selectedFile) return
 
+    const confirmed = await appConfirm('Se reemplazarán todos los datos actuales por el respaldo seleccionado. ¿Deseas continuar?')
+    if (!confirmed) return
+
     try {
       await importBackup(selectedFile)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo importar el respaldo.'
-      window.alert(message)
+      void appAlert(message)
     }
   }
 
@@ -107,7 +113,7 @@ function SettingsPage() {
       window.location.reload()
       return
     } catch {
-      window.alert('No se pudo eliminar la clave. Revisá permisos del navegador.')
+      void appAlert('No se pudo eliminar la clave. Revisá permisos del navegador.')
     }
 
     setResetModalOpen(false)
@@ -125,7 +131,7 @@ function SettingsPage() {
       window.location.reload()
       return
     } catch {
-      window.alert('Error al aplicar reinicio completo.')
+      void appAlert('Error al aplicar reinicio completo.')
     }
 
     setFullResetOpen(false)
@@ -316,6 +322,7 @@ function SettingsPage() {
 
         </section>
       </section>
+      {dialogNode}
     </section>
   )
 }

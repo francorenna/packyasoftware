@@ -3,7 +3,10 @@ import { useLocation } from 'react-router-dom'
 import OrdersForm from '../components/orders/OrdersForm'
 import { formatOrderId } from '../utils/orders'
 import OrdersList from '../components/orders/OrdersList'
+import { getPendingProductionNeeds } from '../utils/production'
 import { getStockMapByProductId } from '../utils/stock'
+import { generateOrderPDF } from '../utils/pdf'
+import useAppDialog from '../hooks/useAppDialog'
 
 const toPositiveNumber = (value) => {
   const parsed = Number(value)
@@ -100,15 +103,23 @@ function OrdersPage({
   onUpdateOrderUrgency,
   onDeleteCancelledOrder,
   onCreateClient,
+  onSaveClient,
   onMarkProductAsUsed,
+  onCreateManualPurchaseList,
 }) {
   const [deliveryFilter, setDeliveryFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [nextOrderId, setNextOrderId] = useState(generateNextOrderId)
   const [isFormModalOpen, setIsFormModalOpen] = useState(false)
+  const [isNeedsModalOpen, setIsNeedsModalOpen] = useState(false)
+  const [needsListDraftMode, setNeedsListDraftMode] = useState(false)
+  const [needsDraftItems, setNeedsDraftItems] = useState([])
+  const [needsListSavedMsg, setNeedsListSavedMsg] = useState('')
+  const [newlyCreatedOrderForPdf, setNewlyCreatedOrderForPdf] = useState(null)
   const [saveSuccessMessage, setSaveSuccessMessage] = useState('')
   const saveMessageTimerRef = useRef(null)
   const displayNextOrderId = useMemo(() => formatOrderId(nextOrderId), [nextOrderId])
+  const { dialogNode, appAlert } = useAppDialog()
 
   const location = useLocation()
   const openOrderId = useMemo(() => {
@@ -122,9 +133,29 @@ function OrdersPage({
 
   const handleCreateOrder = useCallback((orderData) => {
     onCreateOrder(orderData)
+    setNewlyCreatedOrderForPdf(orderData && typeof orderData === 'object' ? { ...orderData } : null)
     setNextOrderId(generateNextOrderId())
     setIsFormModalOpen(false)
   }, [onCreateOrder])
+
+  const closeWorkOrderPrompt = useCallback(() => {
+    setNewlyCreatedOrderForPdf(null)
+  }, [])
+
+  const handleGenerateWorkOrderFromPrompt = useCallback(() => {
+    if (!newlyCreatedOrderForPdf) {
+      closeWorkOrderPrompt()
+      return
+    }
+
+    generateOrderPDF(newlyCreatedOrderForPdf)
+      .catch(() => {
+        void appAlert('No se pudo generar la orden de trabajo en PDF.')
+      })
+      .finally(() => {
+        closeWorkOrderPrompt()
+      })
+  }, [appAlert, closeWorkOrderPrompt, newlyCreatedOrderForPdf])
 
   const handleOrderFormSuccess = useCallback((message) => {
     setSaveSuccessMessage(String(message ?? 'Pedido guardado correctamente'))
@@ -175,6 +206,8 @@ function OrdersPage({
       }
 
       if (event.key === 'Escape' && isFormModalOpen) {
+        // Only close modal if NOT typing in an input field
+        if (isInputLike) return
         event.preventDefault()
         closeFormModal()
       }
@@ -421,6 +454,11 @@ function OrdersPage({
     [products, orders],
   )
 
+  const pendingProductionNeeds = useMemo(
+    () => getPendingProductionNeeds(orders, products),
+    [orders, products],
+  )
+
   return (
     <section className="page-section">
       <header className="page-header">
@@ -432,9 +470,18 @@ function OrdersPage({
               <p className="delivery-save-success">{saveSuccessMessage}</p>
             )}
           </div>
-          <button type="button" className="primary-btn" onClick={openFormModal}>
-            + Nuevo pedido
-          </button>
+          <div className="orders-header-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => setIsNeedsModalOpen(true)}
+            >
+              📦 Ver necesidades
+            </button>
+            <button type="button" className="primary-btn" onClick={openFormModal}>
+              + Nuevo pedido
+            </button>
+          </div>
         </div>
       </header>
 
@@ -557,6 +604,7 @@ function OrdersPage({
           onUpdateOrderItemCompletion={onUpdateOrderItemCompletion}
           onUpdateOrderUrgency={onUpdateOrderUrgency}
           onDeleteCancelledOrder={onDeleteCancelledOrder}
+          onSaveClient={onSaveClient}
         />
       </div>
 
@@ -578,6 +626,7 @@ function OrdersPage({
                 orderId={nextOrderId}
                 products={products}
                 purchases={purchases}
+                orders={orders}
                 clients={clients}
                 stockByProductId={stockByProductId}
                 onCreate={handleCreateOrder}
@@ -592,6 +641,212 @@ function OrdersPage({
           </div>
         </div>
       )}
+
+      {isNeedsModalOpen && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Producción necesaria"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsNeedsModalOpen(false)
+              setNeedsListDraftMode(false)
+              setNeedsListSavedMsg('')
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setIsNeedsModalOpen(false)
+              setNeedsListDraftMode(false)
+              setNeedsListSavedMsg('')
+            }
+          }}
+        >
+          <div className="modal-card needs-modal-card" onClick={(event) => event.stopPropagation()}>
+            {!needsListDraftMode ? (
+              <>
+                <h4>Producción necesaria (pendiente + en proceso)</h4>
+                <p className="muted-label">Solo lectura sobre pedidos activos. No afecta stock ni pedidos.</p>
+
+                {pendingProductionNeeds.length > 0 ? (
+                  <div className="needs-list-wrap">
+                    <table className="payments-table needs-table">
+                      <thead>
+                        <tr>
+                          <th>Producto</th>
+                          <th>Cantidad</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pendingProductionNeeds.map((row) => (
+                          <tr key={String(row.productId || row.productName)}>
+                            <td>{String(row.productName ?? 'Producto sin nombre')}</td>
+                            <td><strong>{Number(row.quantity || 0)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="empty-detail">No hay necesidades de producción para pedidos en Pendiente o En Proceso.</p>
+                )}
+
+                <div className="confirm-delivery-actions">
+                  {pendingProductionNeeds.length > 0 && typeof onCreateManualPurchaseList === 'function' && (
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => {
+                        setNeedsDraftItems(
+                          pendingProductionNeeds.map((row) => ({
+                            productId: String(row.productId ?? ''),
+                            productName: String(row.productName ?? 'Producto sin nombre'),
+                            quantity: Number(row.quantity || 0),
+                            referenceCost: 0,
+                            lineTotal: 0,
+                          }))
+                        )
+                        setNeedsListSavedMsg('')
+                        setNeedsListDraftMode(true)
+                      }}
+                    >
+                      📋 Crear lista de compra
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => { setIsNeedsModalOpen(false); setNeedsListSavedMsg('') }}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h4>Lista de compra (editable)</h4>
+                <p className="muted-label">Ajustá las cantidades antes de guardar. Podés eliminar filas.</p>
+
+                <div className="needs-list-wrap">
+                  <table className="payments-table needs-table">
+                    <thead>
+                      <tr>
+                        <th>Producto</th>
+                        <th>Cantidad</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {needsDraftItems.map((item, idx) => (
+                        <tr key={String(item.productId || item.productName) + idx}>
+                          <td>{item.productName}</td>
+                          <td>
+                            <input
+                              type="number"
+                              min="1"
+                              className="needs-draft-qty-input"
+                              value={item.quantity}
+                              onChange={(e) => {
+                                const val = Math.max(1, Number(e.target.value) || 1)
+                                setNeedsDraftItems((prev) =>
+                                  prev.map((it, i) => i === idx ? { ...it, quantity: val } : it)
+                                )
+                              }}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="ghost-danger-btn"
+                              title="Quitar"
+                              onClick={() =>
+                                setNeedsDraftItems((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                            >✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {needsListSavedMsg && (
+                  <p className="save-success-message" style={{ margin: 0 }}>{needsListSavedMsg}</p>
+                )}
+
+                <div className="confirm-delivery-actions">
+                  {needsDraftItems.length > 0 && (
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => {
+                        const result = onCreateManualPurchaseList({
+                          supplierId: '',
+                          supplierName: 'Por definir',
+                          items: needsDraftItems,
+                        })
+                        if (result) {
+                          setNeedsListSavedMsg('✅ Lista guardada en Listas de compra')
+                          setNeedsListDraftMode(false)
+                        }
+                      }}
+                    >
+                      Guardar lista
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => { setNeedsListDraftMode(false); setNeedsListSavedMsg('') }}
+                  >
+                    ← Volver
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {newlyCreatedOrderForPdf && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Generar orden de trabajo"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeWorkOrderPrompt()
+            }
+          }}
+        >
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h4>¿Generar orden de trabajo?</h4>
+            <p className="muted-label">
+              Pedido {formatOrderId(String(newlyCreatedOrderForPdf?.id ?? ''))} guardado correctamente.
+            </p>
+            <div className="product-actions" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleGenerateWorkOrderFromPrompt}
+              >
+                Sí generar
+              </button>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={closeWorkOrderPrompt}
+              >
+                No
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dialogNode}
     </section>
   )
 }

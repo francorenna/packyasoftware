@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatOrderId } from '../../utils/orders'
 import { createDebouncedStorageWriter } from '../../utils/storageDebounce'
+import useAppDialog from '../../hooks/useAppDialog'
 
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleOrderStatuses = ['Pendiente', 'Lista']
@@ -39,6 +40,35 @@ const normalizeDraftItem = (item) => ({
   isClientMaterial: Boolean(item?.isClientMaterial ?? false),
 })
 
+const hasMeaningfulDraftData = (draft) => {
+  if (!draft || typeof draft !== 'object') return false
+
+  const hasClient = String(draft?.clientId ?? '').trim().length > 0
+  const hasSampleClient = String(draft?.sampleClientName ?? '').trim().length > 0
+  const hasDeliveryDate = String(draft?.deliveryDate ?? '').trim().length > 0
+  const hasFinancialNote = String(draft?.financialNote ?? '').trim().length > 0
+  const hasDiscount = parsePositiveNumber(draft?.discount) > 0
+  const hasItems = (Array.isArray(draft?.items) ? draft.items : []).some(
+    (item) => String(item?.productId ?? '').trim().length > 0,
+  )
+  const hasQuickClientData =
+    Boolean(draft?.isQuickCreateClientOpen) ||
+    String(draft?.quickClientForm?.name ?? '').trim().length > 0 ||
+    String(draft?.quickClientForm?.phone ?? '').trim().length > 0 ||
+    String(draft?.quickClientForm?.address ?? '').trim().length > 0 ||
+    String(draft?.quickClientForm?.notes ?? '').trim().length > 0
+
+  return (
+    hasClient ||
+    hasSampleClient ||
+    hasDeliveryDate ||
+    hasFinancialNote ||
+    hasDiscount ||
+    hasItems ||
+    hasQuickClientData
+  )
+}
+
 const readOrderDraftFromSessionStorage = () => {
   if (typeof window === 'undefined' || !window.sessionStorage) return null
 
@@ -49,7 +79,8 @@ const readOrderDraftFromSessionStorage = () => {
     if (!raw) return null
 
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : null
+    if (!parsed || typeof parsed !== 'object') return null
+    return hasMeaningfulDraftData(parsed) ? parsed : null
   } catch {
     return null
   }
@@ -60,6 +91,7 @@ const clearOrderDraftFromSessionStorage = () => {
 
   try {
     window.sessionStorage.removeItem(ORDER_DRAFT_STORAGE_KEY)
+    window.sessionStorage.removeItem(LEGACY_ORDER_DRAFT_STORAGE_KEY)
   } catch {
     void 0
   }
@@ -102,6 +134,20 @@ const getSearchScore = (productName, query) => {
   return score
 }
 
+const getClientSearchScore = (client, query) => {
+  const queryText = normalizeSearchText(query)
+  if (!queryText) return 0
+
+  const nameScore = getSearchScore(String(client?.name ?? ''), queryText)
+  const phone = normalizeSearchText(client?.phone)
+  const address = normalizeSearchText(client?.address)
+
+  const phoneBoost = phone.includes(queryText) ? 180 : -1
+  const addressBoost = address.includes(queryText) ? 90 : -1
+
+  return Math.max(nameScore, phoneBoost, addressBoost)
+}
+
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
     style: 'currency',
@@ -109,9 +155,19 @@ const formatCurrency = (value) =>
     maximumFractionDigits: 0,
   }).format(value)
 
+const normalizeClientKey = ({ clientId, clientName }) => {
+  const safeClientId = String(clientId ?? '').trim()
+  if (safeClientId) return `id:${safeClientId}`
+
+  const safeClientName = normalizeSearchText(clientName)
+  if (safeClientName) return `name:${safeClientName}`
+  return ''
+}
+
 function OrdersForm({
   orderId,
   products,
+  orders,
   clients,
   stockByProductId,
   onCreate,
@@ -123,6 +179,7 @@ function OrdersForm({
   formId,
 }) {
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
+  const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
   const safeClients = useMemo(() => (Array.isArray(clients) ? clients : []), [clients])
   const sortedClients = useMemo(
     () =>
@@ -143,9 +200,12 @@ function OrdersForm({
   const hasPromptedDraftRestoreRef = useRef(false)
   const shouldSkipDraftPersistRef = useRef(false)
   const productSearchInputRef = useRef(null)
+  const clientSearchInputRef = useRef(null)
   const clientSelectRef = useRef(null)
   const sampleClientNameInputRef = useRef(null)
   const itemProductRefs = useRef({})
+
+  const { dialogNode, appConfirm } = useAppDialog()
   const draftStorageWriter = useMemo(
     () => createDebouncedStorageWriter({
       key: ORDER_DRAFT_STORAGE_KEY,
@@ -214,6 +274,9 @@ function OrdersForm({
       : {}),
   }))
   const [quickClientError, setQuickClientError] = useState('')
+  const [clientSearch, setClientSearch] = useState('')
+  const [highlightedClientSuggestionIndex, setHighlightedClientSuggestionIndex] = useState(0)
+  const [isClientSearchFocused, setIsClientSearchFocused] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState('TODOS')
   const [productSearch, setProductSearch] = useState('')
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
@@ -259,6 +322,64 @@ function OrdersForm({
       .map((row) => row.product)
   }, [normalizedSelectedCategory, productSearch, sortedProducts])
 
+  const clientsById = useMemo(
+    () =>
+      safeClients.reduce((acc, client) => {
+        const key = String(client?.id ?? '').trim()
+        if (!key) return acc
+        acc[key] = client
+        return acc
+      }, {}),
+    [safeClients],
+  )
+
+  const productIdByName = useMemo(
+    () =>
+      safeProducts.reduce((acc, product) => {
+        const key = normalizeSearchText(product?.name)
+        if (!key) return acc
+        acc[key] = String(product?.id ?? '').trim()
+        return acc
+      }, {}),
+    [safeProducts],
+  )
+
+  const filteredClients = useMemo(() => {
+    const query = String(clientSearch ?? '').trim()
+    if (!query) return []
+
+    return sortedClients
+      .map((client) => ({
+        client,
+        score: getClientSearchScore(client, query),
+      }))
+      .filter((row) => row.score >= 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        return String(a.client?.name ?? '').localeCompare(String(b.client?.name ?? ''), 'es', { sensitivity: 'base' })
+      })
+      .map((row) => row.client)
+  }, [clientSearch, sortedClients])
+
+  const autocompleteClients = useMemo(() => filteredClients.slice(0, 8), [filteredClients])
+
+  const shouldShowClientSuggestions = useMemo(() => {
+    const query = normalizeSearchText(clientSearch)
+    if (!isClientSearchFocused) return false
+    if (!query) return false
+    if (autocompleteClients.length === 0) return false
+
+    if (autocompleteClients.length === 1) {
+      const onlyName = normalizeSearchText(autocompleteClients[0]?.name)
+      if (onlyName === query) return false
+    }
+
+    const selectedClientName = normalizeSearchText(clientsById[clientId]?.name)
+    if (selectedClientName && selectedClientName === query) return false
+
+    return true
+  }, [autocompleteClients, clientId, clientSearch, clientsById, isClientSearchFocused])
+
   const suggestedProduct = useMemo(() => {
     const query = String(productSearch ?? '').trim()
     if (!query) return null
@@ -286,13 +407,69 @@ function OrdersForm({
     [safeProducts],
   )
 
+  const suggestedProductsForClient = useMemo(() => {
+    if (isSample) return []
+
+    const selectedClient = clientsById[String(clientId ?? '').trim()]
+    const clientKey = normalizeClientKey({
+      clientId: selectedClient?.id ?? clientId,
+      clientName: selectedClient?.name,
+    })
+
+    if (!clientKey) return []
+
+    const usageByProductId = {}
+
+    safeOrders.forEach((order) => {
+      if (!order || typeof order !== 'object') return
+      if (order.isSample) return
+      if (String(order?.status ?? '') === 'Cancelado') return
+      if (String(order?.id ?? '') === String(orderId ?? '')) return
+
+      const orderKey = normalizeClientKey({
+        clientId: order?.clientId,
+        clientName: order?.clientName ?? order?.client,
+      })
+
+      if (!orderKey || orderKey !== clientKey) return
+
+      ;(Array.isArray(order?.items) ? order.items : []).forEach((item) => {
+        const productId = String(item?.productId ?? '').trim() || productIdByName[normalizeSearchText(item?.productName ?? item?.product)] || ''
+        if (!productId || !productById[productId]) return
+
+        const row = usageByProductId[productId] ?? { count: 0, orders: 0 }
+        row.count += Math.max(Number(item?.quantity || 0), 1)
+        row.orders += 1
+        usageByProductId[productId] = row
+      })
+    })
+
+    return Object.entries(usageByProductId)
+      .map(([productId, usage]) => ({
+        ...productById[productId],
+        suggestedCount: Number(usage?.count || 0),
+        suggestedOrders: Number(usage?.orders || 0),
+      }))
+      .filter((product) => product?.id)
+      .sort((a, b) => {
+        const countDiff = Number(b?.suggestedCount || 0) - Number(a?.suggestedCount || 0)
+        if (countDiff !== 0) return countDiff
+
+        const usageDiff = (Number(b?.usageCount) || 0) - (Number(a?.usageCount) || 0)
+        if (usageDiff !== 0) return usageDiff
+
+        return String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' })
+      })
+      .slice(0, 6)
+  }, [clientId, clientsById, isSample, orderId, productById, productIdByName, safeOrders])
+
   useEffect(() => {
     if (shouldSkipDraftPersistRef.current) {
       shouldSkipDraftPersistRef.current = false
       return
     }
 
-    draftStorageWriter.schedule({
+    const draftPayload = {
       clientId,
       status,
       deliveryDate,
@@ -311,7 +488,15 @@ function OrdersForm({
         address: String(quickClientForm?.address ?? ''),
         notes: String(quickClientForm?.notes ?? ''),
       },
-    })
+    }
+
+    if (!hasMeaningfulDraftData(draftPayload)) {
+      draftStorageWriter.cancel()
+      clearOrderDraftFromSessionStorage()
+      return
+    }
+
+    draftStorageWriter.schedule(draftPayload)
   }, [
     clientId,
     status,
@@ -413,6 +598,8 @@ function OrdersForm({
     setIsQuickCreateClientOpen(false)
     setQuickClientForm(createInitialQuickClientForm())
     setQuickClientError('')
+    setClientSearch('')
+    setHighlightedClientSuggestionIndex(0)
     setProductSearch('')
     setHighlightedSuggestionIndex(0)
   }
@@ -422,14 +609,15 @@ function OrdersForm({
     hasPromptedDraftRestoreRef.current = true
     if (!isModal || !initialDraft) return
 
-    const shouldRestore = window.confirm('Se encontró un borrador de pedido. ¿Querés restaurarlo?')
-    if (shouldRestore) return
+    void appConfirm('Se encontró un borrador de pedido. ¿Querés restaurarlo?').then((shouldRestore) => {
+      if (shouldRestore) return
 
-    shouldSkipDraftPersistRef.current = true
-    clearOrderDraftNow()
-    setTimeout(() => {
-      resetForm()
-    }, 0)
+      shouldSkipDraftPersistRef.current = true
+      clearOrderDraftNow()
+      setTimeout(() => {
+        resetForm()
+      }, 0)
+    })
   }, [initialDraft, isModal, clearOrderDraftNow])
 
   const availableStatuses = isSample ? sampleOrderStatuses : orderStatuses
@@ -641,6 +829,16 @@ function OrdersForm({
     if (quickClientError) setQuickClientError('')
   }
 
+  const selectClientFromSearch = (selectedClientId) => {
+    const safeClientId = String(selectedClientId ?? '').trim()
+    const selectedClient = clientsById[safeClientId]
+
+    setClientId(safeClientId)
+    setClientSearch(String(selectedClient?.name ?? ''))
+    setHighlightedClientSuggestionIndex(0)
+    setIsClientSearchFocused(false)
+  }
+
   const handleQuickCreateClient = async () => {
     const normalizedName = String(quickClientForm.name ?? '').trim()
     if (!normalizedName) {
@@ -817,11 +1015,63 @@ function OrdersForm({
         ) : (
           <label>
             Cliente
+            <input
+              ref={clientSearchInputRef}
+              type="text"
+              value={clientSearch}
+              onChange={(event) => {
+                setClientSearch(event.target.value)
+                setHighlightedClientSuggestionIndex(0)
+              }}
+              onFocus={() => setIsClientSearchFocused(true)}
+              onBlur={() => {
+                window.setTimeout(() => setIsClientSearchFocused(false), 120)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown') {
+                  if (autocompleteClients.length === 0) return
+                  event.preventDefault()
+                  setHighlightedClientSuggestionIndex((prev) => Math.min(prev + 1, autocompleteClients.length - 1))
+                  return
+                }
+
+                if (event.key === 'ArrowUp') {
+                  if (autocompleteClients.length === 0) return
+                  event.preventDefault()
+                  setHighlightedClientSuggestionIndex((prev) => Math.max(prev - 1, 0))
+                  return
+                }
+
+                if (event.key !== 'Enter') return
+
+                const activeClient = autocompleteClients[highlightedClientSuggestionIndex] ?? autocompleteClients[0]
+                if (!activeClient?.id) return
+                event.preventDefault()
+                selectClientFromSearch(activeClient.id)
+              }}
+              placeholder="Buscar cliente por nombre, teléfono o dirección"
+            />
+            {shouldShowClientSuggestions && (
+              <div className="orders-autocomplete-list" role="listbox" aria-label="Sugerencias de clientes">
+                {autocompleteClients.map((client, index) => (
+                  <button
+                    key={`client-suggestion-${client.id}`}
+                    type="button"
+                    className={`orders-autocomplete-item ${index === highlightedClientSuggestionIndex ? 'orders-autocomplete-item-active' : ''}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setHighlightedClientSuggestionIndex(index)}
+                    onClick={() => selectClientFromSearch(client.id)}
+                  >
+                    {client.name}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="inline-field-row">
               <select
                 ref={clientSelectRef}
                 value={clientId}
-                onChange={(event) => setClientId(event.target.value)}
+                onChange={(event) => selectClientFromSearch(event.target.value)}
                 required
                 style={clientError ? { border: '1px solid #c62828' } : undefined}
               >
@@ -832,6 +1082,18 @@ function OrdersForm({
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => {
+                  setClientId('')
+                  setClientSearch('')
+                  setHighlightedClientSuggestionIndex(0)
+                  clientSearchInputRef.current?.focus()
+                }}
+              >
+                Limpiar
+              </button>
               <button
                 type="button"
                 className="secondary-btn"
@@ -883,6 +1145,9 @@ function OrdersForm({
               </>
             )}
             {quickClientError && <p className="payment-error">{quickClientError}</p>}
+            {safeClients.length > 0 && String(clientSearch ?? '').trim() && filteredClients.length === 0 && (
+              <p className="payment-helper">Sin resultados para esa búsqueda.</p>
+            )}
             {safeClients.length === 0 && (
               <p className="payment-error">No hay clientes cargados. Creá uno para continuar.</p>
             )}
@@ -1014,6 +1279,28 @@ function OrdersForm({
               </div>
             )}
           </label>
+
+          {!isSample && clientId && (
+            <div className="orders-most-used-wrap">
+              <p className="orders-most-used-title">Sugerencias para este cliente</p>
+              <div className="orders-most-used-list">
+                {suggestedProductsForClient.length > 0 ? (
+                  suggestedProductsForClient.map((product) => (
+                    <button
+                      key={`client-suggestion-${product.id}`}
+                      type="button"
+                      className="quick-fill-btn"
+                      onClick={() => quickSelectProduct(product.id)}
+                    >
+                      {product.name} ({Number(product?.suggestedCount) || 0})
+                    </button>
+                  ))
+                ) : (
+                  <span className="muted-label">Sin historial suficiente para sugerencias.</span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="orders-most-used-wrap">
             <p className="orders-most-used-title">⭐ Más usados</p>
@@ -1257,6 +1544,7 @@ function OrdersForm({
           </button>
         </div>
       </form>
+      {dialogNode}
     </section>
   )
 }

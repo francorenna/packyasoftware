@@ -1,7 +1,7 @@
 {
   "name": "packya-gestion-interna",
   "private": true,
-  "version": "1.9.0",
+  "version": "2.1.1",
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
@@ -36,9 +36,9 @@
   "build": {
     "appId": "com.packya.gestion",
     "productName": "Packya Gestión",
-    "buildVersion": "1.9.0.0",
+    "buildVersion": "2.1.1.0",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "files": [
       "dist/**/*",

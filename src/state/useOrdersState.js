@@ -382,7 +382,7 @@ function useOrdersState() {
       )
 
       if (!nextOrders.some((o) => o.id === finalId)) {
-        window.alert('Error al guardar pedido')
+        console.error(`[Packya] Error al guardar pedido ${finalId} — no se encontró en nextOrders`)
       }
 
       return nextOrders
@@ -412,6 +412,38 @@ function useOrdersState() {
 
       return [duplicated, ...prevOrders]
     })
+  }
+
+  const reopenArchivedOrderAsNew = (orderId) => {
+    let createdOrderId = ''
+
+    setOrders((prevOrders) => {
+      const original = prevOrders.find((order) => order.id === orderId)
+      if (!original || original.isArchived !== true) return prevOrders
+
+      let newId
+      do {
+        newId = `PED-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+      } while (prevOrders.some((order) => order.id === newId))
+
+      const nextStatus = original.isSample ? sampleStatuses[0] : 'Pendiente'
+
+      const reopenedCopy = applyAutoArchive({
+        ...original,
+        id: newId,
+        status: nextStatus,
+        createdAt: new Date().toISOString(),
+        isArchived: false,
+        archivedAt: null,
+        payments: [],
+        financialAdjustments: [],
+      })
+
+      createdOrderId = newId
+      return [reopenedCopy, ...prevOrders]
+    })
+
+    return createdOrderId
   }
 
   const registerPayment = (orderId, paymentData) => {
@@ -745,6 +777,18 @@ function useOrdersState() {
     )
   }
 
+  const deleteArchivedOrder = (orderId) => {
+    const safeOrderId = String(orderId ?? '').trim()
+    if (!safeOrderId) return
+
+    setOrders((prevOrders) =>
+      prevOrders.filter((order) => {
+        if (String(order?.id ?? '') !== safeOrderId) return true
+        return order?.isArchived !== true
+      }),
+    )
+  }
+
   return {
     orders,
     createOrder,
@@ -761,6 +805,8 @@ function useOrdersState() {
     updateOrderUrgency,
     convertSampleToRealOrder,
     deleteCancelledOrder,
+    reopenArchivedOrderAsNew,
+    deleteArchivedOrder,
   }
 }
 

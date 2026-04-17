@@ -1,6 +1,8 @@
 import { Fragment, useMemo, useState } from 'react'
 import { getOrderFinancialSummary } from '../utils/finance'
 import { formatOrderId } from '../utils/orders'
+import useAppDialog from '../hooks/useAppDialog'
+import SearchInput from '../components/SearchInput'
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
 
@@ -37,11 +39,23 @@ const formatDateTime = (value) => {
   })
 }
 
-function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSampleToRealOrder, onDuplicateOrder }) {
+function ArchivedOrdersPage({
+  orders,
+  onReopenOrder,
+  onReopenOrderAsNew,
+  onCreateClient,
+  onConvertSampleToRealOrder,
+  onDuplicateOrder,
+  onDeleteArchivedOrder,
+}) {
   const safeOrders = useMemo(() => (Array.isArray(orders) ? orders : []), [orders])
   const [sampleConversionOrderId, setSampleConversionOrderId] = useState(null)
   const [sampleClientForm, setSampleClientForm] = useState(() => createClientForm())
   const [detailOrderId, setDetailOrderId] = useState(null)
+  const [searchInput, setSearchInput] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
+
+  const { dialogNode, appAlert, appConfirm } = useAppDialog()
 
   const archivedOrders = useMemo(
     () =>
@@ -59,6 +73,22 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
         }),
     [safeOrders],
   )
+
+  const filteredArchivedOrders = useMemo(() => {
+    const query = String(searchTerm ?? '').trim().toLowerCase()
+    if (!query) return archivedOrders
+
+    return archivedOrders.filter((order) => {
+      const id = String(order?.id ?? '').toLowerCase()
+      const client = String(order?.clientName ?? order?.client ?? '').toLowerCase()
+      const status = String(order?.status ?? '').toLowerCase()
+      const itemsLabel = (Array.isArray(order?.items) ? order.items : [])
+        .map((item) => String(item?.productName ?? item?.product ?? '').toLowerCase())
+        .join(' ')
+
+      return id.includes(query) || client.includes(query) || status.includes(query) || itemsLabel.includes(query)
+    })
+  }, [archivedOrders, searchTerm])
 
   const closeSampleConversionModal = () => {
     setSampleConversionOrderId(null)
@@ -82,7 +112,7 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
     })
 
     if (!createdClient?.id) {
-      window.alert('No se pudo crear el cliente para dar de alta la muestra.')
+      void appAlert('No se pudo crear el cliente para dar de alta la muestra.')
       return
     }
 
@@ -92,6 +122,27 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
     })
 
     closeSampleConversionModal()
+  }
+
+  const handleReopenAsNew = (orderId) => {
+    const newOrderId = onReopenOrderAsNew?.(orderId)
+    if (newOrderId) {
+      window.location.hash = `#/pedidos?open=${encodeURIComponent(newOrderId)}`
+      return
+    }
+
+    const duplicatedOrderId = onDuplicateOrder?.(orderId)
+    if (duplicatedOrderId) {
+      window.location.hash = `#/pedidos?open=${encodeURIComponent(duplicatedOrderId)}`
+    }
+  }
+
+  const handleDeleteArchived = (orderId) => {
+    void appConfirm('¿Eliminar definitivamente este pedido archivado? Esta acción no se puede deshacer.').then((confirmed) => {
+      if (!confirmed) return
+      onDeleteArchivedOrder?.(orderId)
+      setDetailOrderId((current) => (current === orderId ? null : current))
+    })
   }
 
   return (
@@ -106,12 +157,24 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
           <h3>Archivados</h3>
         </div>
 
+        <div className="clients-toolbar">
+          <SearchInput
+            value={searchInput}
+            onValueChange={setSearchInput}
+            onDebouncedChange={setSearchTerm}
+            placeholder="Buscar archivados por cliente, ID, estado o producto"
+            delay={220}
+          />
+        </div>
+
         <div className="table-wrap">
           <table className="orders-table">
             <thead>
               <tr>
+                <th>ID</th>
                 <th>Cliente</th>
                 <th>Tipo</th>
+                <th>Estado</th>
                 <th>Total</th>
                 <th>Fecha producción</th>
                 <th>Fecha entrega</th>
@@ -122,13 +185,16 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
               </tr>
             </thead>
             <tbody>
-              {archivedOrders.map((order, index) => {
+              {filteredArchivedOrders.map((order, index) => {
                 const orderId = String(order.id ?? `archivado-${index}`)
                 const displayOrderId = formatOrderId(orderId)
+                const financialSummary = getOrderFinancialSummary(order)
+                const orderStatus = String(order?.status ?? '-')
 
                 return (
                   <Fragment key={orderId}>
                   <tr>
+                    <td>{displayOrderId}</td>
                     <td>{String(order.clientName ?? order.client ?? 'Sin cliente')}</td>
                     <td>
                       {order.isSample ? (
@@ -137,6 +203,7 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
                         <span className="muted-label">Pedido</span>
                       )}
                     </td>
+                    <td>{orderStatus}</td>
                     <td>{formatCurrency(order.total)}</td>
                     <td>{formatDateTime(order.productionDate)}</td>
                     <td>{formatDate(order.deliveryDate)}</td>
@@ -169,12 +236,9 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
                           <button
                             type="button"
                             className="quick-fill-btn"
-                            onClick={() => {
-                              onReopenOrder?.(orderId)
-                              window.location.hash = `#/pedidos?open=${encodeURIComponent(orderId)}`
-                            }}
+                            onClick={() => handleReopenAsNew(orderId)}
                           >
-                            Editar
+                            Reabrir (nuevo ID)
                           </button>
                           <button
                             type="button"
@@ -182,6 +246,13 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
                             onClick={() => onDuplicateOrder?.(orderId)}
                           >
                             Duplicar
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-ghost-btn"
+                            onClick={() => handleDeleteArchived(orderId)}
+                          >
+                            Eliminar
                           </button>
                         </div>
                       )}
@@ -193,8 +264,19 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
                       <td colSpan={9}>
                         <div className="client-accordion-panel" style={{ padding: '10px 0' }}>
                           <p><strong>ID:</strong> {displayOrderId}</p>
-                          <p><strong>Estado:</strong> {String(order.status ?? '-')}</p>
+                          <p><strong>Estado:</strong> {orderStatus}</p>
+                          <p><strong>Archivado:</strong> {formatDateTime(order.archivedAt)}</p>
+                          <p><strong>Fecha creación:</strong> {formatDateTime(order.createdAt)}</p>
+                          <p><strong>Fecha producción:</strong> {formatDateTime(order.productionDate)}</p>
+                          <p><strong>Fecha entrega:</strong> {formatDate(order.deliveryDate)}</p>
+                          <p><strong>Tipo entrega:</strong> {String(order.deliveredVia ?? '-')}</p>
+                          <p><strong>Entregado por:</strong> {String(order.deliveredBy ?? '-')}</p>
+                          <p><strong>Número envío:</strong> {String(order.trackingNumber ?? '-')}</p>
                           <p><strong>Nota financiera:</strong> {String(order.financialNote ?? '').trim() || '-'}</p>
+                          <p><strong>Total:</strong> {formatCurrency(financialSummary.finalTotal)}</p>
+                          <p><strong>Pagado:</strong> {formatCurrency(financialSummary.totalPaid)}</p>
+                          <p><strong>Saldo:</strong> {formatCurrency(financialSummary.remainingDebt)}</p>
+
                           <table className="orders-table" style={{ marginTop: 8 }}>
                             <thead>
                               <tr>
@@ -218,6 +300,32 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
                               )}
                             </tbody>
                           </table>
+
+                          <table className="orders-table" style={{ marginTop: 8 }}>
+                            <thead>
+                              <tr>
+                                <th>Pago</th>
+                                <th>Monto</th>
+                                <th>Método</th>
+                                <th>Fecha</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(Array.isArray(order.payments) ? order.payments : []).map((payment, paymentIndex) => (
+                                <tr key={String(payment?.id ?? `${orderId}-payment-${paymentIndex}`)}>
+                                  <td>{String(payment?.id ?? '-')}</td>
+                                  <td>{formatCurrency(Number(payment?.amount || 0))}</td>
+                                  <td>{String(payment?.method ?? '-')}</td>
+                                  <td>{formatDateTime(payment?.date)}</td>
+                                </tr>
+                              ))}
+                              {(Array.isArray(order.payments) ? order.payments : []).length === 0 && (
+                                <tr>
+                                  <td colSpan={4} className="empty-detail">Sin pagos registrados.</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
                         </div>
                       </td>
                     </tr>
@@ -228,8 +336,16 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
 
               {archivedOrders.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="empty-detail">
+                  <td colSpan={11} className="empty-detail">
                     No hay pedidos archivados.
+                  </td>
+                </tr>
+              )}
+
+              {archivedOrders.length > 0 && filteredArchivedOrders.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="empty-detail">
+                    No hay resultados para esa búsqueda.
                   </td>
                 </tr>
               )}
@@ -306,6 +422,7 @@ function ArchivedOrdersPage({ orders, onReopenOrder, onCreateClient, onConvertSa
           </div>
         </div>
       )}
+      {dialogNode}
     </section>
   )
 }

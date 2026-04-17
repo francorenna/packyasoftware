@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { generateManualPurchaseListPDF } from '../utils/pdf'
 
 const formatCurrency = (value) =>
@@ -35,6 +35,38 @@ const createSupplierForm = () => ({
   notes: '',
 })
 
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const getSearchScore = (productName, query) => {
+  const normalizedName = normalizeSearchText(productName)
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) return 0
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  if (queryTokens.length === 0) return 0
+
+  const hasAllTokens = queryTokens.every((token) => normalizedName.includes(token))
+  if (!hasAllTokens) return -1
+
+  let score = 0
+
+  if (normalizedName === normalizedQuery) score += 1000
+  if (normalizedName.startsWith(normalizedQuery)) score += 500
+  if (normalizedName.includes(normalizedQuery)) score += 250
+
+  queryTokens.forEach((token) => {
+    if (normalizedName.includes(token)) score += 60
+    if (/^\d+$/.test(token) && normalizedName.includes(token)) score += 180
+  })
+
+  return score
+}
+
 function ManualPurchaseListsPage({
   products,
   suppliers,
@@ -51,6 +83,7 @@ function ManualPurchaseListsPage({
   const [supplierId, setSupplierId] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [items, setItems] = useState([createEmptyItem()])
+  const [itemSearchByIndex, setItemSearchByIndex] = useState({})
   const [formError, setFormError] = useState('')
   const [isQuickSupplierOpen, setIsQuickSupplierOpen] = useState(false)
   const [supplierForm, setSupplierForm] = useState(createSupplierForm())
@@ -106,6 +139,7 @@ function ManualPurchaseListsPage({
     setSupplierId('')
     setSupplierName('')
     setItems([createEmptyItem()])
+    setItemSearchByIndex({})
     setFormError('')
     setIsQuickSupplierOpen(false)
     setSupplierForm(createSupplierForm())
@@ -140,6 +174,12 @@ function ManualPurchaseListsPage({
         if (field === 'productId') {
           const selectedProduct = productsById[String(value)]
           const nextReferenceCost = Math.max(Number(selectedProduct?.referenceCost || 0), 0)
+          if (selectedProduct) {
+            setItemSearchByIndex((prev) => ({
+              ...prev,
+              [index]: String(selectedProduct?.name ?? ''),
+            }))
+          }
           return syncItemLineTotal({
             ...item,
             productId: String(value),
@@ -156,12 +196,46 @@ function ManualPurchaseListsPage({
     )
   }
 
+  const getFilteredProductsForItem = useCallback((index) => {
+    const query = String(itemSearchByIndex[index] ?? '').trim()
+    if (!query) return sortedProducts
+
+    return sortedProducts
+      .map((product) => ({
+        product,
+        score: getSearchScore(String(product?.name ?? ''), query),
+      }))
+      .filter((row) => row.score >= 0)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        return String(a.product?.name ?? '').localeCompare(String(b.product?.name ?? ''), 'es', {
+          sensitivity: 'base',
+        })
+      })
+      .map((row) => row.product)
+  }, [itemSearchByIndex, sortedProducts])
+
   const addItem = () => setItems((prevItems) => [...prevItems, createEmptyItem()])
 
   const removeItem = (index) => {
     setItems((prevItems) => {
       if (prevItems.length === 1) return prevItems
       return prevItems.filter((_, itemIndex) => itemIndex !== index)
+    })
+
+    setItemSearchByIndex((prev) => {
+      const next = {}
+      Object.entries(prev).forEach(([key, value]) => {
+        const numericKey = Number(key)
+        if (!Number.isInteger(numericKey)) return
+        if (numericKey === index) return
+        if (numericKey > index) {
+          next[numericKey - 1] = value
+          return
+        }
+        next[numericKey] = value
+      })
+      return next
     })
   }
 
@@ -230,20 +304,27 @@ function ManualPurchaseListsPage({
   }
 
   const handleEditList = (list) => {
+    const nextItems = (Array.isArray(list.items) ? list.items : []).map((item) =>
+      syncItemLineTotal({
+        productId: String(item.productId ?? '').trim(),
+        productName: String(item.productName ?? '').trim(),
+        quantity: Number(item.quantity || 0),
+        referenceCost: Number(item.referenceCost || 0),
+      }),
+    )
+
+    const nextSearchState = nextItems.reduce((acc, item, index) => {
+      const nameFromCatalog = String(productsById[String(item.productId)]?.name ?? '').trim()
+      acc[index] = nameFromCatalog || String(item.productName ?? '').trim()
+      return acc
+    }, {})
+
     setIsFormModalOpen(true)
     setEditingListId(String(list.id))
     setSupplierId(String(list.supplierId ?? ''))
     setSupplierName(String(list.supplierName ?? '').trim())
-    setItems(
-      (Array.isArray(list.items) ? list.items : []).map((item) =>
-        syncItemLineTotal({
-          productId: String(item.productId ?? '').trim(),
-          productName: String(item.productName ?? '').trim(),
-          quantity: Number(item.quantity || 0),
-          referenceCost: Number(item.referenceCost || 0),
-        }),
-      ),
-    )
+    setItems(nextItems)
+    setItemSearchByIndex(nextSearchState)
     setFormError('')
   }
 
@@ -474,13 +555,28 @@ function ManualPurchaseListsPage({
                   {items.map((item, index) => (
                     <div key={`manual-list-item-${index}`} className="manual-list-item-row">
                       <label className="manual-list-item-field">
+                        <span className="manual-list-item-label">Buscar producto</span>
+                        <input
+                          type="text"
+                          value={String(itemSearchByIndex[index] ?? '')}
+                          onChange={(event) =>
+                            setItemSearchByIndex((prev) => ({
+                              ...prev,
+                              [index]: event.target.value,
+                            }))
+                          }
+                          placeholder="Buscar por nombre o medida"
+                        />
+                      </label>
+
+                      <label className="manual-list-item-field">
                         <span className="manual-list-item-label">Producto</span>
                         <select
                           value={item.productId}
                           onChange={(event) => handleItemChange(index, 'productId', event.target.value)}
                         >
                           <option value="">Producto manual</option>
-                          {sortedProducts.map((product) => (
+                          {getFilteredProductsForItem(index).map((product) => (
                             <option key={product.id} value={product.id}>
                               {product.name}
                             </option>

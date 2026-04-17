@@ -254,6 +254,33 @@ function createWindow() {
 
   mainWindowRef = mainWindow
 
+  mainWindow.on('focus', () => {
+    if (mainWindow.isDestroyed() || mainWindow.isMinimized()) return
+
+    try {
+      mainWindow.webContents.focus()
+    } catch {
+      void 0
+    }
+  })
+
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    const inputType = String(input?.type ?? '')
+    const key = String(input?.key ?? '')
+    const isTypingKey = key.length === 1 || key === 'Backspace' || key === 'Delete'
+
+    if (inputType !== 'keyDown' || !isTypingKey) return
+    if (mainWindow.isDestroyed() || mainWindow.isMinimized()) return
+    if (!mainWindow.isFocused()) return
+    if (mainWindow.webContents.isFocused()) return
+
+    try {
+      mainWindow.webContents.focus()
+    } catch {
+      void 0
+    }
+  })
+
   mainWindow.on('close', (event) => {
     if (allowWindowClose || isHandlingCloseFlow) return
 
@@ -280,6 +307,26 @@ function createWindow() {
 
 app.whenReady().then(() => {
   void initializeLogger()
+
+  ipcMain.handle('packya:focus-window', async () => {
+    try {
+      const targetWindow =
+        mainWindowRef || BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+
+      if (!targetWindow || targetWindow.isDestroyed()) return false
+
+      if (targetWindow.isMinimized()) {
+        targetWindow.restore()
+      }
+
+      targetWindow.show()
+      targetWindow.focus()
+      targetWindow.webContents.focus()
+      return true
+    } catch {
+      return false
+    }
+  })
 
   ipcMain.on('log:error', (_event, payload) => {
     try {

@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import useAppDialog from '../hooks/useAppDialog'
+import SearchInput from '../components/SearchInput'
 
 const PRODUCT_FILTER_OPTIONS = ['TODOS', 'CAJA', 'BOLSA', 'EMBALAJE', 'OTRO']
 
@@ -107,11 +109,18 @@ function PurchasesPage({
   const [supplierForm, setSupplierForm] = useState(createSupplierForm())
   const [editingSupplierId, setEditingSupplierId] = useState(null)
   const [expandedPurchaseId, setExpandedPurchaseId] = useState(null)
+  const [supplierSearchInput, setSupplierSearchInput] = useState('')
+  const [supplierSearchTerm, setSupplierSearchTerm] = useState('')
+  const [purchaseSearchInput, setPurchaseSearchInput] = useState('')
+  const [purchaseSearchTerm, setPurchaseSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('TODOS')
+  const [productSearchInput, setProductSearchInput] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
   const [activeItemIndex, setActiveItemIndex] = useState(0)
   const productSearchInputRef = useRef(null)
+
+  const { dialogNode, appConfirm } = useAppDialog()
 
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
   const safePurchases = useMemo(() => (Array.isArray(purchases) ? purchases : []), [purchases])
@@ -163,6 +172,30 @@ function PurchasesPage({
       })
       .map((row) => row.product)
   }, [normalizedSelectedCategory, productSearch, sortedProducts])
+
+  const filteredSuppliers = useMemo(() => {
+    const query = normalizeSearchText(supplierSearchTerm)
+    if (!query) return sortedSuppliers
+
+    return sortedSuppliers.filter((supplier) => {
+      const name = normalizeSearchText(supplier?.name)
+      const phone = normalizeSearchText(supplier?.phone)
+      const notes = normalizeSearchText(supplier?.notes)
+      return name.includes(query) || phone.includes(query) || notes.includes(query)
+    })
+  }, [sortedSuppliers, supplierSearchTerm])
+
+  const filteredPurchases = useMemo(() => {
+    const query = normalizeSearchText(purchaseSearchTerm)
+    if (!query) return safePurchases
+
+    return safePurchases.filter((purchase) => {
+      const supplierName = normalizeSearchText(purchase?.supplierName)
+      const firstProductName = normalizeSearchText(purchase?.items?.[0]?.productName)
+      const purchaseId = normalizeSearchText(purchase?.id)
+      return supplierName.includes(query) || firstProductName.includes(query) || purchaseId.includes(query)
+    })
+  }, [purchaseSearchTerm, safePurchases])
 
   const suggestedProduct = useMemo(() => {
     const query = String(productSearch ?? '').trim()
@@ -301,6 +334,7 @@ function PurchasesPage({
       )
     })
 
+    setProductSearchInput('')
     setProductSearch('')
     setHighlightedSuggestionIndex(0)
   }
@@ -324,6 +358,7 @@ function PurchasesPage({
     setSupplierId('')
     setItems([createPurchaseItem()])
     setSelectedCategory('TODOS')
+    setProductSearchInput('')
     setProductSearch('')
     setHighlightedSuggestionIndex(0)
     setActiveItemIndex(0)
@@ -382,8 +417,8 @@ function PurchasesPage({
     })
   }
 
-  const handleDeleteSupplier = (supplier) => {
-    const confirmed = window.confirm(`¿Eliminar proveedor ${supplier.name}?`)
+  const handleDeleteSupplier = async (supplier) => {
+    const confirmed = await appConfirm(`¿Eliminar proveedor ${supplier.name}?`)
     if (!confirmed) return
 
     onDeleteSupplier(supplier.id)
@@ -461,6 +496,14 @@ function PurchasesPage({
           </form>
 
           <div className="table-wrap">
+            <SearchInput
+              value={supplierSearchInput}
+              onValueChange={setSupplierSearchInput}
+              onDebouncedChange={setSupplierSearchTerm}
+              placeholder="Buscar proveedor por nombre o teléfono"
+              delay={220}
+              className="clients-toolbar"
+            />
             <table className="products-table">
               <thead>
                 <tr>
@@ -470,7 +513,7 @@ function PurchasesPage({
                 </tr>
               </thead>
               <tbody>
-                {safeSuppliers.map((supplier) => (
+                {filteredSuppliers.map((supplier) => (
                   <tr key={supplier.id}>
                     <td>{supplier.name}</td>
                     <td>{supplier.phone || '-'}</td>
@@ -499,6 +542,14 @@ function PurchasesPage({
                   <tr>
                     <td colSpan={3} className="empty-detail">
                       No hay proveedores cargados.
+                    </td>
+                  </tr>
+                )}
+
+                {safeSuppliers.length > 0 && filteredSuppliers.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="empty-detail">
+                      No hay proveedores para esa búsqueda.
                     </td>
                   </tr>
                 )}
@@ -564,14 +615,18 @@ function PurchasesPage({
 
                   <label>
                     Buscar producto
-                    <input
-                      ref={productSearchInputRef}
-                      type="text"
-                      value={productSearch}
-                      onChange={(event) => {
-                        setProductSearch(event.target.value)
+                    <SearchInput
+                      inputRef={productSearchInputRef}
+                      value={productSearchInput}
+                      onValueChange={(value) => {
+                        setProductSearchInput(value)
                         setHighlightedSuggestionIndex(0)
                       }}
+                      onDebouncedChange={(value) => {
+                        setProductSearch(value)
+                        setHighlightedSuggestionIndex(0)
+                      }}
+                      delay={180}
                       onKeyDown={(event) => {
                         if (event.key === 'ArrowDown') {
                           if (autocompleteProducts.length === 0) return
@@ -733,6 +788,15 @@ function PurchasesPage({
           <h3>Historial de compras</h3>
         </div>
 
+          <SearchInput
+            value={purchaseSearchInput}
+            onValueChange={setPurchaseSearchInput}
+            onDebouncedChange={setPurchaseSearchTerm}
+            placeholder="Buscar en historial por proveedor, producto o ID"
+            delay={220}
+            className="clients-toolbar"
+          />
+
           <div className="table-wrap">
             <table className="products-table">
               <thead>
@@ -745,7 +809,7 @@ function PurchasesPage({
                 </tr>
               </thead>
               <tbody>
-                {safePurchases.map((purchase) => (
+                {filteredPurchases.map((purchase) => (
                   <Fragment key={purchase.id}>
                     <tr>
                       <td>{formatDateTime(purchase.createdAt)}</td>
@@ -808,10 +872,19 @@ function PurchasesPage({
                     </td>
                   </tr>
                 )}
+
+                {safePurchases.length > 0 && filteredPurchases.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="empty-detail">
+                      No hay compras para esa búsqueda.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
       </section>
+      {dialogNode}
     </section>
   )
 }

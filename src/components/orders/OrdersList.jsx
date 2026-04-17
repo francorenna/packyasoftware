@@ -1,9 +1,13 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { APP_CONFIG } from '../../config/app'
 import { getOrderFinancialSummary } from '../../utils/finance'
 import { formatOrderId } from '../../utils/orders'
 import { generateOrderPDF } from '../../utils/pdf'
 import ConfirmDeliveryModal from './ConfirmDeliveryModal'
+import QuickPaymentModal from './QuickPaymentModal'
+import { createCustomCompare } from '../../hooks/useMemoizedOrdersList'
+import useAppDialog from '../../hooks/useAppDialog'
 
 const paymentMethods = ['Efectivo', 'Transferencia', 'MercadoPago']
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
@@ -24,6 +28,31 @@ const createEditableItem = (item = {}) => ({
 })
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
+const CRITICAL_OBSERVATION_REGEX = /(⚠|siempre|revisar|urgente|especial|no olvidar|problema)/i
+
+const normalizeObservationEntry = (entry, index = 0) => {
+  const rawText = typeof entry === 'string' ? entry : entry?.text
+  const text = String(rawText ?? '').trim()
+  if (!text) return null
+
+  return {
+    id: String(entry?.id ?? `OBS-${Date.now()}-${index}`),
+    text,
+    createdAt: String(entry?.createdAt ?? new Date().toISOString()),
+    isCritical:
+      typeof entry?.isCritical === 'boolean'
+        ? entry.isCritical
+        : CRITICAL_OBSERVATION_REGEX.test(text),
+  }
+}
+
+const getClientObservations = (client) => {
+  if (!client || typeof client !== 'object') return []
+  const source = Array.isArray(client.observations) ? client.observations : []
+  return source
+    .map((entry, index) => normalizeObservationEntry(entry, index))
+    .filter(Boolean)
+}
 
 const getClientDebtKey = (order) => {
   const clientId = String(order?.clientId ?? '').trim()
@@ -170,6 +199,7 @@ function OrdersList({
   onUpdateOrderItemCompletion,
   onUpdateOrderUrgency,
   onDeleteCancelledOrder,
+  onSaveClient,
 }) {
   const [expandedOrderId, setExpandedOrderId] = useState(null)
   const didExpandFromPropRef = useRef('')
@@ -195,6 +225,15 @@ function OrdersList({
     collections: false,
     cancelled: true,
   })
+  const [clientObservationsModal, setClientObservationsModal] = useState({
+    isOpen: false,
+    client: null,
+    orderId: '',
+    observations: [],
+    draft: '',
+  })
+
+  const { dialogNode, appAlert, appConfirm } = useAppDialog()
   const safeOrders = useMemo(() => {
     const baseOrders = Array.isArray(orders) ? orders : []
     const seen = new Set()
@@ -264,16 +303,12 @@ function OrdersList({
 
       if (nextPromptMap[orderId]) return
 
-      const shouldMarkReady = window.confirm(
-        'Todos los ítems están completados.\n¿Deseas marcar el pedido como LISTO?',
-      )
-
       nextPromptMap[orderId] = true
       hasMapChanges = true
 
-      if (shouldMarkReady) {
-        onUpdateOrderStatus(orderId, 'Listo')
-      }
+      void appConfirm('Todos los ítems están completados.\n¿Deseas marcar el pedido como LISTO?').then((shouldMarkReady) => {
+        if (shouldMarkReady) onUpdateOrderStatus(orderId, 'Listo')
+      })
     })
 
     if (hasMapChanges) {
@@ -324,7 +359,7 @@ function OrdersList({
     const clientPhone = normalizePhone(targetClient?.phone)
 
     if (!clientPhone) {
-      window.alert('Este cliente no tiene número de WhatsApp registrado.')
+      void appAlert('Este cliente no tiene número de WhatsApp registrado.')
       return
     }
 
@@ -541,6 +576,90 @@ function OrdersList({
     setExpandedOrderId((currentId) => (currentId === orderId ? null : orderId))
   }
 
+  const openClientObservationsModal = (order, client) => {
+    const orderId = String(order?.id ?? '').trim()
+    const fallbackName = String(order?.clientName ?? order?.client ?? '').trim()
+    let targetClient = client && typeof client === 'object' ? client : null
+
+    if (!targetClient?.id) {
+      const knownByName = clientsByName[fallbackName.toLowerCase()] ?? null
+      if (knownByName?.id) {
+        targetClient = knownByName
+      }
+    }
+
+    if (!targetClient?.id && fallbackName) {
+      const createdOrUpdated = onSaveClient?.({ name: fallbackName })
+      if (createdOrUpdated?.id) {
+        targetClient = createdOrUpdated
+        onUpdateOrderClient?.(orderId, {
+          clientId: String(createdOrUpdated.id),
+          clientName: String(createdOrUpdated.name ?? fallbackName),
+        })
+      }
+    }
+
+    if (!targetClient?.id) {
+      void appAlert('No se pudo asociar un cliente para gestionar observaciones.')
+      return
+    }
+
+    setClientObservationsModal({
+      isOpen: true,
+      client: targetClient,
+      orderId,
+      observations: getClientObservations(targetClient),
+      draft: '',
+    })
+  }
+
+  const closeClientObservationsModal = () => {
+    setClientObservationsModal({
+      isOpen: false,
+      client: null,
+      orderId: '',
+      observations: [],
+      draft: '',
+    })
+  }
+
+  const saveClientObservations = (nextObservations) => {
+    const targetClient = clientObservationsModal.client
+    if (!targetClient?.id) return
+
+    onSaveClient?.({
+      ...targetClient,
+      observations: nextObservations,
+    })
+
+    setClientObservationsModal((prev) => ({
+      ...prev,
+      observations: nextObservations,
+      client: {
+        ...targetClient,
+        observations: nextObservations,
+      },
+      draft: '',
+    }))
+  }
+
+  const addClientObservation = () => {
+    const text = String(clientObservationsModal.draft ?? '').trim()
+    if (!text) return
+
+    const newEntry = normalizeObservationEntry({ text }, clientObservationsModal.observations.length)
+    if (!newEntry) return
+
+    saveClientObservations([newEntry, ...clientObservationsModal.observations])
+  }
+
+  const removeClientObservation = (observationId) => {
+    const next = clientObservationsModal.observations.filter(
+      (entry) => String(entry?.id ?? '') !== String(observationId ?? ''),
+    )
+    saveClientObservations(next)
+  }
+
   const openDeliveryConfirmation = (orderId, order) => {
     setDeliveryConfirmModal({
       isOpen: true,
@@ -577,13 +696,9 @@ function OrdersList({
     onUpdateOrderStatus?.(targetOrderId, 'Entregado')
     handleCancelDeliveryConfirmation()
 
-    const shouldRegisterPaymentNow = window.confirm(
-      'Entrega confirmada.\n¿Querés registrar un pago ahora?',
-    )
-
-    if (shouldRegisterPaymentNow) {
-      openPaymentQuickModal(targetOrderId)
-    }
+    void appConfirm('Entrega confirmada.\n¿Querés registrar un pago ahora?').then((shouldRegisterPaymentNow) => {
+      if (shouldRegisterPaymentNow) openPaymentQuickModal(targetOrderId)
+    })
   }
 
   const handleDeliveryOverlayClick = (event) => {
@@ -616,11 +731,6 @@ function OrdersList({
     })
   }
 
-  const handlePaymentOverlayClick = (event) => {
-    if (event.target !== event.currentTarget) return
-    handleClosePaymentQuickModal()
-  }
-
   const paymentQuickOrder = useMemo(
     () => safeOrders.find((order) => String(order?.id ?? '') === String(paymentQuickModal.orderId ?? '')) ?? null,
     [paymentQuickModal.orderId, safeOrders],
@@ -631,27 +741,26 @@ function OrdersList({
     [paymentQuickOrder],
   )
 
-  const handleQuickRegisterPayment = () => {
+  const handleQuickPaymentConfirm = ({ amount, method }) => {
     const targetOrderId = String(paymentQuickModal.orderId ?? '').trim()
     if (!targetOrderId || !paymentQuickSummary) return
 
-    const draft = paymentDrafts[targetOrderId] ?? { amount: '', method: paymentMethods[0] }
-    const amount = Number(draft.amount)
+    const safeAmount = Number(amount)
     const remainingDebt = Number(paymentQuickSummary.remainingDebt || 0)
 
-    if (Number.isNaN(amount) || amount <= 0) return
-    if (amount > remainingDebt) return
+    if (Number.isNaN(safeAmount) || safeAmount <= 0) return
+    if (safeAmount > remainingDebt) return
 
     onRegisterPayment?.(targetOrderId, {
-      amount,
-      method: draft.method,
+      amount: safeAmount,
+      method,
     })
 
     setPaymentDrafts((prevDrafts) => ({
       ...prevDrafts,
       [targetOrderId]: {
         amount: '',
-        method: draft.method,
+        method: method || paymentMethods[0],
       },
     }))
 
@@ -851,6 +960,14 @@ function OrdersList({
               const resolvedClientByName = clientsByName[
                 String(order?.clientName ?? order?.client ?? '').trim().toLowerCase()
               ]
+              const resolvedClient = selectedClientId
+                ? clientsById[selectedClientId] ?? resolvedClientByName ?? null
+                : resolvedClientByName ?? null
+              const clientObservations = getClientObservations(resolvedClient)
+              const hasClientObservations = clientObservations.length > 0
+              const hasCriticalClientObservations = clientObservations.some((entry) => Boolean(entry?.isCritical))
+              const canShowClientObservations = String(orderClient).trim().length > 0
+              const hasLinkedClient = Boolean(resolvedClient?.id)
               const selectedClientIdForSelect =
                 selectedClientId || String(resolvedClientByName?.id ?? '')
               const sectionBadgeLabel = section.badge
@@ -916,9 +1033,11 @@ function OrdersList({
                 ? 0
                 : Math.max(shippingCostValue, 0)
               const quickActionLabel =
-                orderStatus === 'Pendiente'
-                  ? 'Iniciar producción'
-                  : orderStatus === 'En Proceso'
+                order.isSample && orderStatus === 'Pendiente'
+                  ? 'Marcar lista'
+                  : orderStatus === 'Pendiente'
+                    ? 'Iniciar producción'
+                    : orderStatus === 'En Proceso'
                     ? 'Marcar listo'
                     : orderStatus === 'Listo'
                       ? 'Registrar entrega'
@@ -929,6 +1048,11 @@ function OrdersList({
               const handleQuickAction = (event) => {
                 event.stopPropagation()
 
+                if (order.isSample && orderStatus === 'Pendiente') {
+                  onUpdateOrderStatus?.(orderId, 'Lista')
+                  return
+                }
+
                 if (orderStatus === 'Pendiente') {
                   onUpdateOrderStatus?.(orderId, 'En Proceso')
                   return
@@ -936,10 +1060,10 @@ function OrdersList({
 
                 if (orderStatus === 'En Proceso') {
                   if (!allItemsCompleted) {
-                    const shouldContinue = window.confirm(
-                      'Todavía hay ítems sin completar. ¿Querés marcar igual este pedido como LISTO?',
-                    )
-                    if (!shouldContinue) return
+                    void appConfirm('Todavía hay ítems sin completar. ¿Querés marcar igual este pedido como LISTO?').then((shouldContinue) => {
+                      if (shouldContinue) onUpdateOrderStatus?.(orderId, 'Listo')
+                    })
+                    return
                   }
 
                   onUpdateOrderStatus?.(orderId, 'Listo')
@@ -985,7 +1109,7 @@ function OrdersList({
                 const clientPhone = normalizePhone(targetClient?.phone)
 
                 if (!clientPhone) {
-                  window.alert('Este cliente no tiene número de WhatsApp registrado.')
+                  void appAlert('Este cliente no tiene número de WhatsApp registrado.')
                   return
                 }
 
@@ -1158,7 +1282,7 @@ function OrdersList({
                   .filter(Boolean)
 
                 if (sanitized.length === 0) {
-                  window.alert('Agregá al menos un producto válido para guardar el pedido.')
+                  void appAlert('Agregá al menos un producto válido para guardar el pedido.')
                   return
                 }
 
@@ -1195,10 +1319,9 @@ function OrdersList({
               const handleDeleteCancelledOrder = () => {
                 if (orderStatus !== 'Cancelado') return
 
-                const confirmed = window.confirm('¿Desea eliminar definitivamente este pedido cancelado?')
-                if (!confirmed) return
-
-                onDeleteCancelledOrder?.(orderId)
+                void appConfirm('¿Desea eliminar definitivamente este pedido cancelado?').then((confirmed) => {
+                  if (confirmed) onDeleteCancelledOrder?.(orderId)
+                })
               }
 
               const handleToggleUrgent = (event) => {
@@ -1238,6 +1361,27 @@ function OrdersList({
                       <div className="order-client-cell">
                         {isUrgent && <span className="urgent-badge">🔥 URGENTE</span>}
                         <span>{orderClient}</span>
+                        {canShowClientObservations && (
+                          <button
+                            type="button"
+                            className="client-observation-info-btn"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openClientObservationsModal(order, resolvedClient)
+                            }}
+                            title={!hasLinkedClient
+                              ? 'Asociá un cliente para guardar observaciones'
+                              : hasClientObservations
+                                ? 'Ver observaciones del cliente'
+                                : 'Cargar observaciones del cliente'}
+                            aria-label="Ver observaciones del cliente"
+                          >
+                            ℹ
+                          </button>
+                        )}
+                        {hasCriticalClientObservations && (
+                          <span className="client-special-badge">⚠ Cliente especial</span>
+                        )}
                         {hasClientDebt && <span className="client-debt-badge">⚠ Cliente con deuda</span>}
                       </div>
                     </td>
@@ -1674,11 +1818,11 @@ function OrdersList({
                               className="secondary-btn"
                               onClick={() => {
                                 generateOrderPDF(order).catch(() => {
-                                  window.alert('No se pudo generar el PDF del pedido.')
+                                  void appAlert('No se pudo generar el PDF del pedido.')
                                 })
                               }}
                             >
-                              📄 Imprimir orden de pedido
+                              🖨 Orden de trabajo
                             </button>
                             <button
                               type="button"
@@ -1825,7 +1969,7 @@ function OrdersList({
         </table>
       </div>
 
-      {deliveryConfirmModal.isOpen && (
+      {deliveryConfirmModal.isOpen && typeof document !== 'undefined' && createPortal(
         <div
           className="modal-overlay"
           role="dialog"
@@ -1852,118 +1996,89 @@ function OrdersList({
               onCancel={handleCancelDeliveryConfirmation}
             />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {paymentQuickModal.isOpen && paymentQuickOrder && paymentQuickSummary && (() => {
-        const modalOrderId = String(paymentQuickModal.orderId ?? '')
-        const modalDraft = paymentDrafts[modalOrderId] ?? { amount: '', method: paymentMethods[0] }
-        const modalEnteredAmount = Number(modalDraft.amount)
-        const modalHasAmount = modalDraft.amount !== ''
-        const modalRemainingDebt = Number(paymentQuickSummary.remainingDebt || 0)
-        const modalInvalidAmount = Number.isNaN(modalEnteredAmount) || modalEnteredAmount <= 0 || modalEnteredAmount > modalRemainingDebt
+      <QuickPaymentModal
+        isOpen={paymentQuickModal.isOpen}
+        order={paymentQuickOrder}
+        summary={paymentQuickSummary}
+        onClose={handleClosePaymentQuickModal}
+        onConfirm={handleQuickPaymentConfirm}
+        onSendReminder={sendPaymentReminder}
+        formatCurrency={formatCurrency}
+      />
 
-        return (
-          <div
-            className="modal-overlay"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Cobrar saldo del pedido"
-            onClick={handlePaymentOverlayClick}
-          >
-            <div
-              className="modal-card quick-payment-modal-shell"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') handleClosePaymentQuickModal()
-              }}
-            >
-              <h4 className="confirm-delivery-modal-title">
-                Cobrar saldo de {formatOrderId(String(paymentQuickOrder.id ?? ''))}
-              </h4>
-              <div className="quick-payment-summary-grid">
-                <p>
-                  <span>Cliente</span>
-                  <strong>{String(paymentQuickOrder.clientName ?? paymentQuickOrder.client ?? 'Sin cliente')}</strong>
-                </p>
-                <p>
-                  <span>Total pagado</span>
-                  <strong>{formatCurrency(Number(paymentQuickSummary.totalPaid || 0))}</strong>
-                </p>
-                <p>
-                  <span>Deuda restante</span>
-                  <strong>{formatCurrency(modalRemainingDebt)}</strong>
-                </p>
-              </div>
+      {clientObservationsModal.isOpen && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Observaciones del cliente"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeClientObservationsModal()
+          }}
+        >
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h4>
+              Observaciones de cliente {clientObservationsModal.client?.name ? `· ${clientObservationsModal.client.name}` : ''}
+            </h4>
+            <p className="muted-label">
+              Pedido {formatOrderId(String(clientObservationsModal.orderId ?? ''))}
+            </p>
 
-              <div className="payment-form">
-                <div className="payment-form-row">
-                  <input
-                    type="number"
-                    min="0"
-                    max={modalRemainingDebt}
-                    step="1"
-                    value={modalDraft.amount}
-                    onChange={(event) => updateDraft(modalOrderId, 'amount', event.target.value)}
-                    placeholder="Monto"
-                  />
-                  <select
-                    value={modalDraft.method}
-                    onChange={(event) => updateDraft(modalOrderId, 'method', event.target.value)}
-                  >
-                    {paymentMethods.map((method) => (
-                      <option key={method} value={method}>
-                        {method}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="payment-helper-row">
-                  <p className="payment-helper">Deuda restante: {formatCurrency(modalRemainingDebt)}</p>
-                  <button
-                    type="button"
-                    className="quick-fill-btn"
-                    onClick={() => updateDraft(modalOrderId, 'amount', String(modalRemainingDebt))}
-                    disabled={modalRemainingDebt <= 0}
-                  >
-                    Completar deuda
-                  </button>
-                </div>
-                {modalHasAmount && modalInvalidAmount && (
-                  <p className="payment-error">El monto no puede superar la deuda restante.</p>
-                )}
-              </div>
+            <div className="client-observations-list">
+              {clientObservationsModal.observations.length > 0 ? (
+                clientObservationsModal.observations.map((entry) => (
+                  <div key={entry.id} className={`client-observation-item ${entry.isCritical ? 'client-observation-item-critical' : ''}`}>
+                    <div>
+                      <p>{entry.text}</p>
+                      <small>
+                        {entry.createdAt ? formatDateTime(entry.createdAt) : 'Sin fecha'}
+                        {entry.isCritical ? ' · Crítica' : ''}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="quick-fill-btn"
+                      onClick={() => removeClientObservation(entry.id)}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="empty-detail">Este cliente no tiene observaciones cargadas.</p>
+              )}
+            </div>
 
-              <div className="confirm-delivery-actions">
-                <button
-                  type="button"
-                  className="secondary-btn"
-                  onClick={() => sendPaymentReminder(paymentQuickOrder, modalRemainingDebt)}
-                >
-                  📩 Recordar cliente
-                </button>
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={handleQuickRegisterPayment}
-                  disabled={modalRemainingDebt <= 0 || modalInvalidAmount}
-                >
-                  Agregar pago
-                </button>
-                <button
-                  type="button"
-                  className="secondary-btn"
-                  onClick={handleClosePaymentQuickModal}
-                >
-                  Cancelar
-                </button>
-              </div>
+            <div className="payment-form" style={{ marginTop: 10 }}>
+              <h4>Agregar observación rápida</h4>
+              <textarea
+                value={clientObservationsModal.draft}
+                onChange={(event) =>
+                  setClientObservationsModal((prev) => ({ ...prev, draft: event.target.value }))
+                }
+                placeholder="Ej: ⚠ revisar diseño SIEMPRE"
+              />
+              <p className="payment-helper">Tip: si incluye "⚠" se marcará como observación crítica.</p>
+            </div>
+
+            <div className="product-actions" style={{ marginTop: 12 }}>
+              <button type="button" className="primary-btn" onClick={addClientObservation}>
+                Guardar observación
+              </button>
+              <button type="button" className="secondary-btn" onClick={closeClientObservationsModal}>
+                Cerrar
+              </button>
             </div>
           </div>
-        )
-      })()}
+        </div>
+      )}
+      {dialogNode}
     </section>
   )
 }
 
-export default OrdersList
+export default memo(OrdersList, createCustomCompare())

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { downloadPurchasePlanPDF, openPurchasePlanPDF } from '../utils/pdf'
+import useAppDialog from '../hooks/useAppDialog'
 
 const PURCHASE_PLANS_STORAGE_KEY = 'packya_purchase_plans'
 const ACTIVE_ORDER_STATUSES = new Set([
@@ -88,6 +89,8 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
   const [plans, setPlans] = useState(() => loadPurchasePlans())
   const [costModalOpen, setCostModalOpen] = useState(false)
   const [planBuilderOpen, setPlanBuilderOpen] = useState(false)
+
+  const { dialogNode, appAlert } = useAppDialog()
   const [recommendedPlanRows, setRecommendedPlanRows] = useState([])
   const [recommendedSelectionById, setRecommendedSelectionById] = useState({})
   const [manualPlanRows, setManualPlanRows] = useState([createManualPlanRow()])
@@ -511,7 +514,7 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
 
     const combinedRows = [...selectedRecommendations, ...manualRows]
     if (combinedRows.length === 0) {
-      window.alert('Seleccioná al menos una recomendación o agregá un producto manual al plan.')
+      void appAlert('Seleccioná al menos una recomendación o agregá un producto manual al plan.')
       return
     }
 
@@ -547,7 +550,7 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
 
     const invalidRow = withCosts.find((row) => !(Number(row.unitCost || 0) > 0))
     if (invalidRow) {
-      window.alert('Completá un costo válido para todos los productos faltantes.')
+      void appAlert('Completá un costo válido para todos los productos faltantes.')
       return
     }
 
@@ -1176,6 +1179,7 @@ function StockPage({ products, orders, purchases, onAdjustStock, onUpdateProduct
           </div>
         </div>
       )}
+      {dialogNode}
     </section>
   )
 }

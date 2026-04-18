@@ -6,6 +6,7 @@ import OrdersList from '../components/orders/OrdersList'
 import { getPendingProductionNeeds } from '../utils/production'
 import { getStockMapByProductId } from '../utils/stock'
 import { generateOrderPDF } from '../utils/pdf'
+import { getOrderFinancialSummary } from '../utils/finance'
 import useAppDialog from '../hooks/useAppDialog'
 
 const toPositiveNumber = (value) => {
@@ -296,11 +297,7 @@ function OrdersPage({
       }
 
       if (status === 'Entregado' && order?.isArchived !== true) {
-        const totalPaid = (Array.isArray(order?.payments) ? order.payments : []).reduce(
-          (acc, payment) => acc + toPositiveNumber(payment?.amount),
-          0,
-        )
-        const remainingDebt = Math.max(toPositiveNumber(order?.total) - totalPaid, 0)
+        const { remainingDebt } = getOrderFinancialSummary(order)
 
         if (remainingDebt > 0) {
           summary.collections.cantidadPedidos += 1
@@ -377,12 +374,10 @@ function OrdersPage({
 
     const debtRows = activeOrders
       .map((order) => {
-        const totalPaid = (Array.isArray(order?.payments) ? order.payments : []).reduce(
-          (acc, payment) => acc + toPositiveNumber(payment?.amount),
-          0,
-        )
-        const finalTotal = toPositiveNumber(order?.total)
-        const remainingDebt = Math.max(finalTotal - totalPaid, 0)
+        const financial = getOrderFinancialSummary(order)
+        const totalPaid = Number(financial.totalPaid || 0)
+        const finalTotal = Number(financial.finalTotal || 0)
+        const remainingDebt = Number(financial.remainingDebt || 0)
         const daysSinceDelivery = getDaysSinceDateInput(order?.deliveryDate)
 
         return {

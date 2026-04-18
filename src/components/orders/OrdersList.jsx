@@ -161,6 +161,13 @@ const orderSectionMeta = {
     accentClassName: 'orders-section-collections',
     emptyText: 'No hay pedidos entregados con deuda.',
   },
+  delivered: {
+    title: 'Entregados',
+    badge: 'Entregado',
+    description: 'Pedidos entregados sin deuda pendiente.',
+    accentClassName: 'orders-section-ready',
+    emptyText: 'No hay pedidos entregados para mostrar.',
+  },
   cancelled: {
     title: 'Cancelados',
     badge: 'Cancelado',
@@ -175,6 +182,7 @@ const getOperationalSectionKey = (order, remainingDebt = 0) => {
 
   if (status === 'Listo') return 'ready'
   if (status === 'Entregado' && remainingDebt > 0) return 'collections'
+  if (status === 'Entregado') return 'delivered'
   if (status === 'Cancelado') return 'cancelled'
   return 'production'
 }
@@ -223,6 +231,7 @@ function OrdersList({
     production: false,
     ready: false,
     collections: false,
+    delivered: true,
     cancelled: true,
   })
   const [clientObservationsModal, setClientObservationsModal] = useState({
@@ -456,6 +465,7 @@ function OrdersList({
       production: [],
       ready: [],
       collections: [],
+      delivered: [],
       cancelled: [],
     }
 
@@ -548,6 +558,7 @@ function OrdersList({
         production: Boolean(parsed.production ?? prev.production),
         ready: Boolean(parsed.ready ?? prev.ready),
         collections: Boolean(parsed.collections ?? prev.collections),
+        delivered: Boolean(parsed.delivered ?? prev.delivered),
         cancelled: Boolean(parsed.cancelled ?? prev.cancelled),
       }))
     } catch {

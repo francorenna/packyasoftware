@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createDebouncedStorageWriter } from '../utils/storageDebounce'
+import { getOrderFinancialSummary } from '../utils/finance'
 
 const ORDERS_STORAGE_KEY = 'packya_orders'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -63,12 +64,6 @@ const toDateOnlyIso = (value) => {
   return parsed.toISOString()
 }
 
-const calculateTotalPaid = (payments) =>
-  (Array.isArray(payments) ? payments : []).reduce(
-    (acc, payment) => acc + toPositiveNumber(payment.amount),
-    0,
-  )
-
 const calculateOrderSubtotal = (order) =>
   (Array.isArray(order?.items) ? order.items : []).reduce(
     (acc, item) =>
@@ -78,9 +73,8 @@ const calculateOrderSubtotal = (order) =>
 
 const getRemainingDebt = (order) => {
   if (!order || typeof order !== 'object') return 0
-  const finalTotal = toPositiveNumber(order.total)
-  const totalPaid = calculateTotalPaid(order.payments)
-  return Math.max(finalTotal - totalPaid, 0)
+  const summary = getOrderFinancialSummary(order)
+  return Math.max(Number(summary?.remainingDebt || 0), 0)
 }
 
 const applySampleAutoArchive = (order) => {
@@ -469,8 +463,7 @@ function useOrdersState() {
         // Do not register payments for sample orders
         if (order.isSample) return order
 
-        const totalPaid = calculateTotalPaid(order.payments)
-        const remainingDebt = Math.max(toPositiveNumber(order.total) - totalPaid, 0)
+        const remainingDebt = getRemainingDebt(order)
         if (paymentAmount > remainingDebt) return order
 
         const nextOrder = {

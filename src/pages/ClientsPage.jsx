@@ -332,13 +332,16 @@ function ClientsPage({
   }
 
   const registerPayment = () => {
-    const latestOrder = expandedOrdersTimeline[expandedOrdersTimeline.length - 1]
-    const fallbackOrderId = String(latestOrder?.id ?? '')
+    const fallbackOrderId = String(outstandingAccountOrderOptions[0]?.id ?? defaultOrderOptionId)
     const orderId = String(paymentDraft.orderId || fallbackOrderId).trim()
     const amount = Number(paymentDraft.amount)
     const note = String(paymentDraft.note ?? '').trim()
 
     if (!orderId || !Number.isFinite(amount) || amount <= 0) return
+    const targetOrder = expandedOrdersTimeline.find((row) => String(row.id) === orderId)
+    const remainingDebt = Number(targetOrder?.balance || 0)
+    if (remainingDebt <= 0) return
+    if (amount > remainingDebt) return
 
     onRegisterPayment?.(orderId, {
       amount,
@@ -396,9 +399,29 @@ function ClientsPage({
       label: `${row.id} · ${formatDate(row.createdAt)} · Saldo ${formatCurrency(row.balance)}`,
     }))
 
+  const outstandingAccountOrderOptions = expandedOrdersTimeline
+    .filter((row) => Number(row.balance || 0) > 0)
+    .sort((a, b) => toTimestamp(a.createdAt || a.deliveryDate) - toTimestamp(b.createdAt || b.deliveryDate))
+    .map((row) => ({
+      id: row.id,
+      label: `${row.id} · ${formatDate(row.createdAt)} · Saldo ${formatCurrency(row.balance)}`,
+    }))
+
   const defaultOrderOptionId = String(
-    accountOrderOptions[0]?.id ?? expandedOrdersTimeline[expandedOrdersTimeline.length - 1]?.id ?? '',
+    outstandingAccountOrderOptions[0]?.id ??
+      accountOrderOptions[0]?.id ??
+      expandedOrdersTimeline[expandedOrdersTimeline.length - 1]?.id ??
+      '',
   )
+
+  const selectedPaymentOrderId = String(paymentDraft.orderId || defaultOrderOptionId)
+  const selectedPaymentOrder = expandedOrdersTimeline.find((row) => String(row.id) === selectedPaymentOrderId) ?? null
+  const selectedPaymentOrderRemainingDebt = Number(selectedPaymentOrder?.balance || 0)
+  const enteredPaymentAmount = Number(paymentDraft.amount)
+  const hasPaymentAmount = String(paymentDraft.amount ?? '').trim().length > 0
+  const isPaymentAmountInvalid =
+    hasPaymentAmount &&
+    (Number.isNaN(enteredPaymentAmount) || enteredPaymentAmount <= 0 || enteredPaymentAmount > selectedPaymentOrderRemainingDebt)
 
   const generateAccountPdf = () => {
     if (!expandedClient) return
@@ -741,10 +764,15 @@ function ClientsPage({
                                 <div className="client-actions-grid">
                                   <div className="card-block client-action-card client-action-primary">
                                     <h4>Registrar pago</h4>
+                                    {outstandingAccountOrderOptions.length > 0 && (
+                                      <p className="payment-helper">
+                                        Sugerencia: se prioriza el pedido con deuda mas antigua.
+                                      </p>
+                                    )}
                                     <label>
                                       Pedido
                                       <select
-                                        value={paymentDraft.orderId || defaultOrderOptionId}
+                                        value={selectedPaymentOrderId}
                                         onChange={(event) => setPaymentDraft((prev) => ({ ...prev, orderId: event.target.value }))}
                                       >
                                         {accountOrderOptions.map((option) => (
@@ -752,15 +780,34 @@ function ClientsPage({
                                         ))}
                                       </select>
                                     </label>
+                                    <p className="payment-helper">
+                                      Saldo del pedido seleccionado: {formatCurrency(selectedPaymentOrderRemainingDebt)}
+                                    </p>
                                     <label>
                                       Monto
                                       <input
                                         type="number"
                                         min="0"
+                                        max={Math.max(selectedPaymentOrderRemainingDebt, 0)}
                                         value={paymentDraft.amount}
                                         onChange={(event) => setPaymentDraft((prev) => ({ ...prev, amount: event.target.value }))}
                                       />
                                     </label>
+                                    <div className="payment-helper-row">
+                                      <button
+                                        type="button"
+                                        className="quick-fill-btn"
+                                        onClick={() =>
+                                          setPaymentDraft((prev) => ({
+                                            ...prev,
+                                            amount: String(Math.max(selectedPaymentOrderRemainingDebt, 0)),
+                                          }))
+                                        }
+                                        disabled={selectedPaymentOrderRemainingDebt <= 0}
+                                      >
+                                        Completar deuda del pedido
+                                      </button>
+                                    </div>
                                     <label>
                                       Método
                                       <select
@@ -784,6 +831,11 @@ function ClientsPage({
                                     <button type="button" className="primary-btn" onClick={registerPayment}>
                                       Registrar pago
                                     </button>
+                                    {isPaymentAmountInvalid && (
+                                      <p className="payment-error">
+                                        El monto debe ser mayor a 0 y no superar el saldo del pedido seleccionado.
+                                      </p>
+                                    )}
                                   </div>
 
                                   <div className="card-block client-action-card client-action-neutral">

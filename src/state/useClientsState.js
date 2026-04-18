@@ -6,6 +6,10 @@ const STORAGE_VERSION_KEY = 'packya_storage_version'
 const CRITICAL_OBSERVATION_REGEX = /(⚠|siempre|revisar|urgente|especial|no olvidar|problema)/i
 
 const normalizePhone = (value) => String(value ?? '').replace(/[^\d]/g, '').trim()
+const toPositiveNumber = (value) => {
+  const parsed = Number(value)
+  return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
+}
 
 const normalizeObservationEntry = (entry, index = 0) => {
   const rawText = typeof entry === 'string' ? entry : entry?.text
@@ -43,6 +47,47 @@ const normalizeClientObservations = (value) => {
   return []
 }
 
+const normalizePaymentAllocationEntry = (entry, index = 0) => {
+  if (!entry || typeof entry !== 'object') return null
+
+  const allocationsSource = Array.isArray(entry.allocations) ? entry.allocations : []
+  const allocations = allocationsSource
+    .map((allocation) => {
+      if (!allocation || typeof allocation !== 'object') return null
+
+      const orderId = String(allocation.orderId ?? '').trim()
+      const amount = toPositiveNumber(allocation.amount)
+      if (!orderId || amount <= 0) return null
+
+      return {
+        orderId,
+        amount,
+      }
+    })
+    .filter(Boolean)
+
+  const amount = toPositiveNumber(entry.amount)
+  if (amount <= 0) return null
+
+  return {
+    id: String(entry.id ?? `CPAY-${Date.now()}-${index}`),
+    amount,
+    method: String(entry.method ?? 'Transferencia').trim() || 'Transferencia',
+    createdAt: String(entry.createdAt ?? new Date().toISOString()),
+    note: String(entry.note ?? '').trim(),
+    overpayCredit: toPositiveNumber(entry.overpayCredit),
+    allocations,
+  }
+}
+
+const normalizeClientPaymentAllocations = (value) => {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .map((entry, index) => normalizePaymentAllocationEntry(entry, index))
+    .filter(Boolean)
+}
+
 const initialClients = [
   {
     id: 'CLI-001',
@@ -73,6 +118,8 @@ const normalizeClient = (client, index) => {
     address: String(client.address ?? '').trim(),
     notes: String(client.notes ?? '').trim(),
     observations: normalizeClientObservations(client.observations),
+    creditBalance: toPositiveNumber(client.creditBalance),
+    paymentAllocations: normalizeClientPaymentAllocations(client.paymentAllocations),
     createdAt: String(client.createdAt ?? new Date().toISOString()),
   }
 }
@@ -140,6 +187,15 @@ function useClientsState() {
       const hasAddress = Object.prototype.hasOwnProperty.call(safeClientData, 'address')
       const hasNotes = Object.prototype.hasOwnProperty.call(safeClientData, 'notes')
       const hasObservations = Object.prototype.hasOwnProperty.call(safeClientData, 'observations')
+      const hasCreditBalance = Object.prototype.hasOwnProperty.call(safeClientData, 'creditBalance')
+      const hasPaymentAllocations = Object.prototype.hasOwnProperty.call(safeClientData, 'paymentAllocations')
+
+      if (hasCreditBalance) {
+        const incomingCredit = Number(safeClientData.creditBalance)
+        if (Number.isFinite(incomingCredit) && incomingCredit < 0) {
+          throw new Error('creditBalance no puede ser negativo')
+        }
+      }
 
       const nextClient = {
         id: resolvedId,
@@ -159,6 +215,12 @@ function useClientsState() {
         observations: hasObservations
           ? normalizeClientObservations(safeClientData.observations)
           : normalizeClientObservations(existing?.observations),
+        creditBalance: hasCreditBalance
+          ? toPositiveNumber(safeClientData.creditBalance)
+          : toPositiveNumber(existing?.creditBalance),
+        paymentAllocations: hasPaymentAllocations
+          ? normalizeClientPaymentAllocations(safeClientData.paymentAllocations)
+          : normalizeClientPaymentAllocations(existing?.paymentAllocations),
         createdAt: String(existing?.createdAt ?? new Date().toISOString()),
       }
 

@@ -43,6 +43,7 @@ function App() {
     createOrder,
     duplicateOrder,
     registerPayment,
+    registerClientPayment,
     updateOrderStatus,
     updateOrderDelivery,
     registerOrderFinancialAdjustment,
@@ -565,6 +566,7 @@ function App() {
                 clients={clients}
                 onCreateOrder={handleCreateOrder}
                 onRegisterPayment={registerPayment}
+                onRegisterClientPayment={registerClientPayment}
                 onUpdateOrderStatus={handleUpdateOrderStatus}
                 onUpdateOrderDelivery={updateOrderDelivery}
                 onUpdateOrderClient={updateOrderClient}

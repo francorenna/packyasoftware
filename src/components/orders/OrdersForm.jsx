@@ -618,7 +618,7 @@ function OrdersForm({
         resetForm()
       }, 0)
     })
-  }, [initialDraft, isModal, clearOrderDraftNow])
+  }, [initialDraft, isModal, clearOrderDraftNow, appConfirm])
 
   const availableStatuses = isSample ? sampleOrderStatuses : orderStatuses
 

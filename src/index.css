@@ -2021,6 +2021,192 @@ input[type='number']:focus {
   border: 1px solid #fdba74;
 }
 
+.collections-compact-zone {
+  margin-top: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.collections-compact-head {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.collections-compact-head h4 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #0f172a;
+}
+
+.collections-compact-alert {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.collections-compact-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+  text-align: center;
+  color: #64748b;
+  background: #ffffff;
+}
+
+.collections-compact-grid {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.collections-client-card {
+  border: 1px solid #e2e8f0;
+  border-left: 5px solid #94a3b8;
+  border-radius: 0.65rem;
+  background: #ffffff;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.55rem;
+  cursor: pointer;
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.collections-client-card:hover {
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.collections-client-card:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.collections-client-card-fresh {
+  border-left-color: #16a34a;
+}
+
+.collections-client-card-warning {
+  border-left-color: #ea580c;
+}
+
+.collections-client-card-critical {
+  border-left-color: #dc2626;
+}
+
+.collections-client-card-collecting {
+  animation: collectionsCollectPulse 0.75s ease;
+}
+
+@keyframes collectionsCollectPulse {
+  0% {
+    box-shadow: 0 0 0 rgba(34, 197, 94, 0);
+    background: #ffffff;
+  }
+
+  25% {
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+    background: #f0fdf4;
+  }
+
+  100% {
+    box-shadow: 0 0 0 rgba(34, 197, 94, 0);
+    background: #ffffff;
+  }
+}
+
+.collections-client-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.collections-client-head h5 {
+  margin: 0;
+  font-size: 0.92rem;
+  color: #0f172a;
+}
+
+.collections-client-head p {
+  margin: 0.18rem 0 0;
+  font-size: 0.79rem;
+  color: #64748b;
+}
+
+.collections-client-oldest-hint {
+  margin-top: 0.2rem;
+  font-size: 0.76rem;
+  color: #0f766e;
+  font-weight: 600;
+}
+
+.collections-client-actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
+.collections-client-actions strong {
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.collections-client-orders {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.collections-client-order-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.2fr) minmax(100px, 1fr) minmax(80px, 0.7fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 0.45rem;
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.collections-client-order-row .quick-fill-btn[aria-busy='true'] {
+  opacity: 0.75;
+  cursor: wait;
+}
+
+.collections-client-order-row span:nth-child(2) {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+@media (max-width: 780px) {
+  .collections-client-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .collections-client-actions {
+    justify-items: start;
+  }
+
+  .collections-client-order-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+
+  .collections-client-order-row .quick-fill-btn {
+    width: fit-content;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collections-client-card-collecting {
+    animation: none;
+  }
+}
+
 .item-client-material-badge {
   display: inline-flex;
   width: fit-content;
@@ -2487,6 +2673,54 @@ input[type='number']:focus {
 
 .client-high-debt-badge:hover {
   transform: translateY(-1px);
+}
+
+.client-credit-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.08rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #166534;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+}
+
+.credit .client-summary-value {
+  color: #166534;
+}
+
+.client-payment-allocation-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.client-payment-allocation-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.6rem;
+  background: #ffffff;
+  padding: 0.55rem 0.65rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.client-payment-allocation-item p {
+  margin: 0;
+}
+
+.client-payment-allocation-item ul {
+  margin: 0;
+  padding-left: 1rem;
+  color: #334155;
+  font-size: 0.84rem;
+}
+
+.client-credit-note {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #166534;
 }
 
 .client-summary-alert {

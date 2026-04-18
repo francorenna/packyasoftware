@@ -41,7 +41,6 @@ const formatDateTime = (value) => {
 
 function ArchivedOrdersPage({
   orders,
-  onReopenOrder,
   onReopenOrderAsNew,
   onCreateClient,
   onConvertSampleToRealOrder,

@@ -77,6 +77,31 @@ const getRemainingDebt = (order) => {
   return Math.max(Number(summary?.remainingDebt || 0), 0)
 }
 
+const normalizeName = (value) => String(value ?? '').trim().toLowerCase()
+
+const isOrderFromClient = (order, clientId, clientName) => {
+  const orderClientId = String(order?.clientId ?? '').trim()
+  const safeClientId = String(clientId ?? '').trim()
+  if (orderClientId && safeClientId) return orderClientId === safeClientId
+
+  const orderClientName = normalizeName(order?.clientName ?? order?.client)
+  const safeClientName = normalizeName(clientName)
+  return Boolean(orderClientName && safeClientName && orderClientName === safeClientName)
+}
+
+const parseDebtPriorityTimestamp = (order) => {
+  const delivery = String(order?.deliveryDate ?? '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(delivery)) {
+    const parsed = new Date(`${delivery}T00:00:00`).getTime()
+    if (!Number.isNaN(parsed)) return parsed
+  }
+
+  const createdAt = new Date(order?.createdAt).getTime()
+  if (!Number.isNaN(createdAt)) return createdAt
+
+  return Number.POSITIVE_INFINITY
+}
+
 const applySampleAutoArchive = (order) => {
   if (!order?.isSample) return order
 
@@ -448,16 +473,20 @@ function useOrdersState() {
       ? paymentData.method
       : allowedPaymentMethods[0]
 
-    const newPayment = {
-      id: `PAY-${Date.now()}`,
-      amount: paymentAmount,
-      method: paymentMethod,
-      date: new Date().toISOString(),
-      note: String(paymentData.note ?? '').trim(),
-    }
+    setOrders((prevOrders) => {
+      const targetOrder = prevOrders.find((o) => o.id === orderId)
 
-    setOrders((prevOrders) =>
-      prevOrders.map((order) => {
+      const newPayment = {
+        id: `PAY-${Date.now()}`,
+        amount: paymentAmount,
+        method: paymentMethod,
+        date: new Date().toISOString(),
+        note: String(paymentData.note ?? '').trim(),
+        orderId,
+        clientId: String(targetOrder?.clientId ?? ''),
+      }
+
+      return prevOrders.map((order) => {
         if (order.id !== orderId) return order
 
         // Do not register payments for sample orders
@@ -472,8 +501,114 @@ function useOrdersState() {
         }
 
         return applyAutoArchive(nextOrder)
-      }),
-    )
+      })
+    })
+  }
+
+  const registerClientPayment = (paymentData) => {
+    const safePaymentData = paymentData && typeof paymentData === 'object' ? paymentData : {}
+    const paymentAmount = toPositiveNumber(safePaymentData.amount)
+    if (paymentAmount <= 0) return
+
+    let allocationResult = null
+
+    const paymentMethod = allowedPaymentMethods.includes(safePaymentData.method)
+      ? safePaymentData.method
+      : allowedPaymentMethods[0]
+
+    const targetClientId = String(safePaymentData.clientId ?? '').trim()
+    const targetClientName = String(safePaymentData.clientName ?? '').trim()
+    if (!targetClientId && !targetClientName) return
+
+    setOrders((prevOrders) => {
+      const eligibleOrders = prevOrders
+        .filter((order) => !order?.isSample)
+        .filter((order) => String(order?.status ?? '') !== 'Cancelado')
+        .filter((order) => isOrderFromClient(order, targetClientId, targetClientName))
+        .filter((order) => getRemainingDebt(order) > 0)
+        .toSorted((a, b) => {
+          const aTs = parseDebtPriorityTimestamp(a)
+          const bTs = parseDebtPriorityTimestamp(b)
+          if (aTs !== bTs) return aTs - bTs
+          return String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
+        })
+
+      if (eligibleOrders.length === 0) return prevOrders
+
+      let remainingToAllocate = paymentAmount
+      const allocationMap = {}
+
+      eligibleOrders.forEach((order) => {
+        if (remainingToAllocate <= 0) return
+
+        const debt = getRemainingDebt(order)
+        if (debt <= 0) return
+
+        const allocation = Math.min(debt, remainingToAllocate)
+        if (allocation <= 0) return
+
+        allocationMap[String(order.id)] = allocation
+        remainingToAllocate -= allocation
+      })
+
+      const allocatedOrderIds = Object.keys(allocationMap)
+      if (allocatedOrderIds.length === 0) return prevOrders
+
+      const allocationBatchId = `PAYB-${Date.now()}`
+      const createdAt = new Date().toISOString()
+      const totalApplied = allocatedOrderIds.reduce(
+        (acc, id) => acc + Number(allocationMap[id] || 0),
+        0,
+      )
+      const overpayCredit = Math.max(paymentAmount - totalApplied, 0)
+
+      allocationResult = {
+        paymentAmount,
+        totalApplied,
+        overpayCredit,
+        allocationBatchId,
+        clientId: targetClientId,
+        clientName: targetClientName,
+        createdAt,
+        method: paymentMethod,
+        note: String(safePaymentData.note ?? '').trim(),
+        allocations: allocatedOrderIds.map((id) => ({
+          orderId: id,
+          amount: Number(allocationMap[id] || 0),
+        })),
+      }
+
+      return prevOrders.map((order) => {
+        const orderId = String(order?.id ?? '')
+        const allocatedAmount = Number(allocationMap[orderId] || 0)
+        if (allocatedAmount <= 0) return order
+
+        const allocationIndex = allocatedOrderIds.findIndex((id) => id === orderId)
+        const newPayment = {
+          id: `PAY-${Date.now()}-${allocationIndex + 1}`,
+          amount: allocatedAmount,
+          method: paymentMethod,
+          date: createdAt,
+          note: String(safePaymentData.note ?? '').trim(),
+          orderId,
+          clientId: String(order?.clientId ?? targetClientId),
+          allocationBatchId,
+          allocationOrder: allocationIndex + 1,
+          isAutoAllocated: true,
+          clientPaymentAmount: paymentAmount,
+          overpayCredit,
+        }
+
+        const nextOrder = {
+          ...order,
+          payments: [...(Array.isArray(order.payments) ? order.payments : []), newPayment],
+        }
+
+        return applyAutoArchive(nextOrder)
+      })
+    })
+
+    return allocationResult
   }
 
   const updateOrderStatus = (orderId, nextStatus) => {
@@ -787,6 +922,7 @@ function useOrdersState() {
     createOrder,
     duplicateOrder,
     registerPayment,
+    registerClientPayment,
     updateOrderStatus,
     updateOrderDelivery,
     registerOrderFinancialAdjustment,

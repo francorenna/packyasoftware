@@ -96,6 +96,7 @@ function OrdersPage({
   clients,
   onCreateOrder,
   onRegisterPayment,
+  onRegisterClientPayment,
   onUpdateOrderStatus,
   onUpdateOrderDelivery,
   onUpdateOrderClient,
@@ -592,6 +593,7 @@ function OrdersPage({
           archivedCount={archivedOrderCount}
           initialExpandedOrderId={openOrderId}
           onRegisterPayment={onRegisterPayment}
+            onRegisterClientPayment={onRegisterClientPayment}
           onUpdateOrderStatus={onUpdateOrderStatus}
           onUpdateOrderDelivery={onUpdateOrderDelivery}
           onUpdateOrderClient={onUpdateOrderClient}

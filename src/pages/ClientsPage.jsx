@@ -3,6 +3,7 @@ import { getOrderFinancialSummary } from '../utils/finance'
 import { generateClientAccountPDF } from '../utils/reportsPdf'
 import useAppDialog from '../hooks/useAppDialog'
 import SearchInput from '../components/SearchInput'
+import { formatOrderId } from '../utils/orders'
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', {
@@ -226,6 +227,27 @@ function ClientsPage({
     () => (expandedClient ? buildClientOrdersTimeline(expandedClient, safeOrders) : []),
     [expandedClient, safeOrders],
   )
+
+  const expandedClientPaymentAllocations = useMemo(() => {
+    const source = Array.isArray(expandedClient?.paymentAllocations) ? expandedClient.paymentAllocations : []
+    return source
+      .map((entry) => {
+        const amount = Number(entry?.amount || 0)
+        if (amount <= 0) return null
+
+        return {
+          id: String(entry?.id ?? ''),
+          amount,
+          method: String(entry?.method ?? '-'),
+          createdAt: String(entry?.createdAt ?? ''),
+          note: String(entry?.note ?? '').trim(),
+          overpayCredit: Number(entry?.overpayCredit || 0),
+          allocations: Array.isArray(entry?.allocations) ? entry.allocations : [],
+        }
+      })
+      .filter(Boolean)
+      .toSorted((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt))
+  }, [expandedClient])
 
   const deliveredUnpaidCount = useMemo(() => {
     if (expandedOrdersTimeline.length === 0) return 0
@@ -597,6 +619,7 @@ function ClientsPage({
                 {filteredClients.map((client) => {
                   const stats = statsMap[client.id]
                   const isExpanded = expandedClientId === client.id
+                  const clientCredit = Number(client?.creditBalance || 0)
                   const hasHighDebt = Number(stats?.totalPendiente ?? 0) > HIGH_DEBT_THRESHOLD
                   const clientObservations = getClientObservations(client)
                   const hasCriticalObservations = clientObservations.some((entry) => Boolean(entry?.isCritical))
@@ -624,6 +647,9 @@ function ClientsPage({
                           <div className="client-debt-cell">
                             <span>{formatCurrency(stats?.totalPendiente ?? 0)}</span>
                             {hasHighDebt && <span className="client-high-debt-badge">🔴 Cliente con deuda alta</span>}
+                            {clientCredit > 0 && (
+                              <span className="client-credit-badge">🟢 Saldo a favor {formatCurrency(clientCredit)}</span>
+                            )}
                           </div>
                         </td>
                         <td>{stats?.lastOrderId || '-'}</td>
@@ -703,6 +729,10 @@ function ClientsPage({
                                     <p className="client-summary-label">Último pedido</p>
                                     <p className="client-summary-value">{stats?.lastOrderId || '-'}</p>
                                   </div>
+                                  <div className="client-summary-card credit">
+                                    <p className="client-summary-label">Saldo a favor</p>
+                                    <p className="client-summary-value">{formatCurrency(Number(client?.creditBalance || 0))}</p>
+                                  </div>
                                 </div>
                               </div>
 
@@ -760,83 +790,124 @@ function ClientsPage({
                                 </table>
                               </div>
 
+                              <div className="card-block">
+                                <h4>Historial de imputación de pagos</h4>
+                                {expandedClientPaymentAllocations.length > 0 ? (
+                                  <div className="client-payment-allocation-list">
+                                    {expandedClientPaymentAllocations.map((entry) => (
+                                      <div key={entry.id || `${entry.createdAt}-${entry.amount}`} className="client-payment-allocation-item">
+                                        <p>
+                                          <strong>Pago {formatCurrency(entry.amount)}</strong>
+                                          {' · '}
+                                          {entry.method}
+                                          {' · '}
+                                          {formatDate(entry.createdAt)}
+                                        </p>
+                                        {entry.note && <p className="muted-label">{entry.note}</p>}
+                                        {entry.allocations.length > 0 ? (
+                                          <ul>
+                                            {entry.allocations.map((allocation, index) => (
+                                              <li key={`${entry.id}-allocation-${index}`}>
+                                                → aplicado a {formatOrderId(String(allocation?.orderId ?? ''))}: {formatCurrency(Number(allocation?.amount || 0))}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        ) : (
+                                          <p className="muted-label">Sin imputaciones registradas.</p>
+                                        )}
+                                        {entry.overpayCredit > 0 && (
+                                          <p className="client-credit-note">→ saldo generado: {formatCurrency(entry.overpayCredit)}</p>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="empty-detail">Este cliente no tiene historial de imputaciones todavía.</p>
+                                )}
+                              </div>
+
                               {accountOrderOptions.length > 0 && (
                                 <div className="client-actions-grid">
-                                  <div className="card-block client-action-card client-action-primary">
-                                    <h4>Registrar pago</h4>
-                                    {outstandingAccountOrderOptions.length > 0 && (
+                                  {outstandingAccountOrderOptions.length > 0 ? (
+                                    <div className="card-block client-action-card client-action-primary">
+                                      <h4>Registrar pago</h4>
                                       <p className="payment-helper">
                                         Sugerencia: se prioriza el pedido con deuda mas antigua.
                                       </p>
-                                    )}
-                                    <label>
-                                      Pedido
-                                      <select
-                                        value={selectedPaymentOrderId}
-                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, orderId: event.target.value }))}
-                                      >
-                                        {accountOrderOptions.map((option) => (
-                                          <option key={option.id} value={option.id}>{option.label}</option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <p className="payment-helper">
-                                      Saldo del pedido seleccionado: {formatCurrency(selectedPaymentOrderRemainingDebt)}
-                                    </p>
-                                    <label>
-                                      Monto
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max={Math.max(selectedPaymentOrderRemainingDebt, 0)}
-                                        value={paymentDraft.amount}
-                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, amount: event.target.value }))}
-                                      />
-                                    </label>
-                                    <div className="payment-helper-row">
-                                      <button
-                                        type="button"
-                                        className="quick-fill-btn"
-                                        onClick={() =>
-                                          setPaymentDraft((prev) => ({
-                                            ...prev,
-                                            amount: String(Math.max(selectedPaymentOrderRemainingDebt, 0)),
-                                          }))
-                                        }
-                                        disabled={selectedPaymentOrderRemainingDebt <= 0}
-                                      >
-                                        Completar deuda del pedido
-                                      </button>
-                                    </div>
-                                    <label>
-                                      Método
-                                      <select
-                                        value={paymentDraft.method}
-                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, method: event.target.value }))}
-                                      >
-                                        {paymentMethods.map((method) => (
-                                          <option key={method} value={method}>{method}</option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <label>
-                                      Observación
-                                      <input
-                                        type="text"
-                                        value={paymentDraft.note}
-                                        onChange={(event) => setPaymentDraft((prev) => ({ ...prev, note: event.target.value }))}
-                                        placeholder="Ej: Pago parcial en efectivo"
-                                      />
-                                    </label>
-                                    <button type="button" className="primary-btn" onClick={registerPayment}>
-                                      Registrar pago
-                                    </button>
-                                    {isPaymentAmountInvalid && (
-                                      <p className="payment-error">
-                                        El monto debe ser mayor a 0 y no superar el saldo del pedido seleccionado.
+                                      <label>
+                                        Pedido
+                                        <select
+                                          value={selectedPaymentOrderId}
+                                          onChange={(event) => setPaymentDraft((prev) => ({ ...prev, orderId: event.target.value }))}
+                                        >
+                                          {outstandingAccountOrderOptions.map((option) => (
+                                            <option key={option.id} value={option.id}>{option.label}</option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <p className="payment-helper">
+                                        Saldo del pedido seleccionado: {formatCurrency(selectedPaymentOrderRemainingDebt)}
                                       </p>
-                                    )}
-                                  </div>
+                                      <label>
+                                        Monto
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max={Math.max(selectedPaymentOrderRemainingDebt, 0)}
+                                          value={paymentDraft.amount}
+                                          onChange={(event) => setPaymentDraft((prev) => ({ ...prev, amount: event.target.value }))}
+                                        />
+                                      </label>
+                                      <div className="payment-helper-row">
+                                        <button
+                                          type="button"
+                                          className="quick-fill-btn"
+                                          onClick={() =>
+                                            setPaymentDraft((prev) => ({
+                                              ...prev,
+                                              amount: String(Math.max(selectedPaymentOrderRemainingDebt, 0)),
+                                            }))
+                                          }
+                                          disabled={selectedPaymentOrderRemainingDebt <= 0}
+                                        >
+                                          Completar deuda del pedido
+                                        </button>
+                                      </div>
+                                      <label>
+                                        Método
+                                        <select
+                                          value={paymentDraft.method}
+                                          onChange={(event) => setPaymentDraft((prev) => ({ ...prev, method: event.target.value }))}
+                                        >
+                                          {paymentMethods.map((method) => (
+                                            <option key={method} value={method}>{method}</option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <label>
+                                        Observación
+                                        <input
+                                          type="text"
+                                          value={paymentDraft.note}
+                                          onChange={(event) => setPaymentDraft((prev) => ({ ...prev, note: event.target.value }))}
+                                          placeholder="Ej: Pago parcial en efectivo"
+                                        />
+                                      </label>
+                                      <button type="button" className="primary-btn" onClick={registerPayment}>
+                                        Registrar pago
+                                      </button>
+                                      {isPaymentAmountInvalid && (
+                                        <p className="payment-error">
+                                          El monto debe ser mayor a 0 y no superar el saldo del pedido seleccionado.
+                                        </p>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="card-block client-action-card client-action-primary">
+                                      <h4>Registrar pago</h4>
+                                      <p className="payment-helper">Este cliente no tiene deuda pendiente. No hay pagos para registrar.</p>
+                                    </div>
+                                  )}
 
                                   <div className="card-block client-action-card client-action-neutral">
                                     <h4>Agregar observación</h4>

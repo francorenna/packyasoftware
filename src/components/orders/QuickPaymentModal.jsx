@@ -18,6 +18,11 @@ function QuickPaymentModal({
   isOpen,
   order,
   summary,
+  title,
+  confirmLabel = 'Agregar pago',
+  showReminder = true,
+  allowOverpay = false,
+  clientName,
   onClose,
   onConfirm,
   onSendReminder,
@@ -30,11 +35,13 @@ function QuickPaymentModal({
   const orderId = String(order?.id ?? '')
   const totalPaid = Number(summary?.totalPaid || 0)
   const remainingDebt = Number(summary?.remainingDebt || 0)
+  const resolvedClientName = String(clientName ?? order?.clientName ?? order?.client ?? 'Sin cliente')
+  const resolvedTitle = String(title ?? '').trim() || `Cobrar saldo de ${formatOrderId(orderId)}`
 
   const enteredAmount = Number(amount)
   const hasAmount = amount !== ''
   const invalidAmount =
-    Number.isNaN(enteredAmount) || enteredAmount <= 0 || enteredAmount > remainingDebt
+    Number.isNaN(enteredAmount) || enteredAmount <= 0 || (!allowOverpay && enteredAmount > remainingDebt)
 
   const shouldTrace = readModalDebugFlag()
 
@@ -119,12 +126,12 @@ function QuickPaymentModal({
         onClick={(event) => event.stopPropagation()}
       >
         <h4 className="confirm-delivery-modal-title">
-          Cobrar saldo de {formatOrderId(orderId)}
+          {resolvedTitle}
         </h4>
         <div className="quick-payment-summary-grid">
           <p>
             <span>Cliente</span>
-            <strong>{String(order.clientName ?? order.client ?? 'Sin cliente')}</strong>
+            <strong>{resolvedClientName}</strong>
           </p>
           <p>
             <span>Total pagado</span>
@@ -142,7 +149,7 @@ function QuickPaymentModal({
               ref={amountInputRef}
               type="number"
               min="0"
-              max={remainingDebt}
+              max={allowOverpay ? undefined : remainingDebt}
               step="1"
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
@@ -171,26 +178,33 @@ function QuickPaymentModal({
               Completar deuda
             </button>
           </div>
+          {allowOverpay && (
+            <p className="payment-helper">
+              Si el monto supera la deuda total, se registrará saldo a favor del cliente.
+            </p>
+          )}
           {hasAmount && invalidAmount && (
             <p className="payment-error">El monto no puede superar la deuda restante.</p>
           )}
         </div>
 
         <div className="confirm-delivery-actions">
-          <button
-            type="button"
-            className="secondary-btn"
-            onClick={() => onSendReminder?.(order, remainingDebt)}
-          >
-            📩 Recordar cliente
-          </button>
+          {showReminder && (
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => onSendReminder?.(order, remainingDebt)}
+            >
+              📩 Recordar cliente
+            </button>
+          )}
           <button
             type="button"
             className="primary-btn"
             onClick={handleConfirm}
             disabled={remainingDebt <= 0 || invalidAmount}
           >
-            Agregar pago
+            {confirmLabel}
           </button>
           <button
             type="button"

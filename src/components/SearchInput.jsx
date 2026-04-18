@@ -13,25 +13,25 @@ function SearchInput({
   onFocus,
   onBlur,
 }) {
+  const isControlled = value !== undefined
   const [internalValue, setInternalValue] = useState(String(value ?? ''))
-
-  useEffect(() => {
-    setInternalValue(String(value ?? ''))
-  }, [value])
+  const resolvedValue = isControlled ? String(value ?? '') : internalValue
 
   useEffect(() => {
     if (typeof onDebouncedChange !== 'function') return undefined
 
     const timeoutId = window.setTimeout(() => {
-      onDebouncedChange(internalValue)
+      onDebouncedChange(resolvedValue)
     }, Math.max(Number(delay) || 0, 0))
 
     return () => window.clearTimeout(timeoutId)
-  }, [delay, internalValue, onDebouncedChange])
+  }, [delay, onDebouncedChange, resolvedValue])
 
   const handleChange = (event) => {
     const nextValue = String(event.target.value ?? '')
-    setInternalValue(nextValue)
+    if (!isControlled) {
+      setInternalValue(nextValue)
+    }
     onValueChange?.(nextValue)
   }
 
@@ -40,7 +40,7 @@ function SearchInput({
       <input
         ref={inputRef}
         type="text"
-        value={internalValue}
+        value={resolvedValue}
         onChange={handleChange}
         onKeyDown={onKeyDown}
         onFocus={onFocus}
@@ -48,12 +48,14 @@ function SearchInput({
         placeholder={placeholder}
         aria-label={ariaLabel || placeholder}
       />
-      {internalValue && (
+      {resolvedValue && (
         <button
           type="button"
           className="quick-fill-btn"
           onClick={() => {
-            setInternalValue('')
+            if (!isControlled) {
+              setInternalValue('')
+            }
             onValueChange?.('')
             onDebouncedChange?.('')
           }}

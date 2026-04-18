@@ -139,6 +139,23 @@ const getDaysSinceDelivery = (value) => {
   return days
 }
 
+const getDaysSinceTimestamp = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 0
+
+  const today = new Date()
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const diffMs = todayOnly.getTime() - dateOnly.getTime()
+  return Math.max(0, Math.floor(diffMs / 86400000))
+}
+
+const getDebtAgingClassName = (days) => {
+  if (days > 10) return 'collections-client-card-critical'
+  if (days >= 4) return 'collections-client-card-warning'
+  return 'collections-client-card-fresh'
+}
+
 const orderSectionMeta = {
   production: {
     title: 'Producción',
@@ -200,6 +217,7 @@ function OrdersList({
   archivedCount = 0,
   initialExpandedOrderId,
   onRegisterPayment,
+  onRegisterClientPayment,
   onUpdateOrderStatus,
   onUpdateOrderDelivery,
   onUpdateOrderClient,
@@ -211,6 +229,9 @@ function OrdersList({
 }) {
   const [expandedOrderId, setExpandedOrderId] = useState(null)
   const didExpandFromPropRef = useRef('')
+  const collectionCardRefs = useRef({})
+  const hasAutoScrolledCriticalRef = useRef(false)
+  const collectingFeedbackTimeoutRef = useRef(null)
   const [paymentDrafts, setPaymentDrafts] = useState({})
   const [deliveryDrafts, setDeliveryDrafts] = useState({})
   const [itemsDrafts, setItemsDrafts] = useState({})
@@ -226,7 +247,12 @@ function OrdersList({
   const [paymentQuickModal, setPaymentQuickModal] = useState({
     isOpen: false,
     orderId: '',
+    mode: 'order',
+    clientKey: '',
   })
+  const [collectingOrderId, setCollectingOrderId] = useState('')
+  const [collectingClientKey, setCollectingClientKey] = useState('')
+  const [expandedCollectionClients, setExpandedCollectionClients] = useState({})
   const [collapsedSections, setCollapsedSections] = useState({
     production: false,
     ready: false,
@@ -323,7 +349,7 @@ function OrdersList({
     if (hasMapChanges) {
       setAutoReadyPromptedByOrder(nextPromptMap)
     }
-  }, [autoReadyPromptedByOrder, onUpdateOrderStatus, safeOrders])
+  }, [autoReadyPromptedByOrder, onUpdateOrderStatus, safeOrders, appConfirm])
 
   const clientsById = useMemo(
     () =>
@@ -525,6 +551,89 @@ function OrdersList({
     })
   }, [orderFinancialMap, safeOrders])
 
+  const operationalSections = useMemo(
+    () => groupedSections.filter((section) => section.key !== 'collections'),
+    [groupedSections],
+  )
+
+  const collectionClients = useMemo(() => {
+    const clientsMap = safeOrders.reduce((acc, order) => {
+      if (order?.isSample) return acc
+
+      const orderId = String(order?.id ?? '')
+      const status = String(order?.status ?? '')
+      const summary = orderFinancialMap[orderId] ?? getOrderFinancialSummary(order)
+      const remainingDebt = Number(summary?.remainingDebt || 0)
+      if (status !== 'Entregado' || remainingDebt <= 0) return acc
+
+      const clientKey = getClientDebtKey(order)
+      if (!clientKey) return acc
+
+      const orderClientId = String(order?.clientId ?? '')
+      const fallbackName = String(order?.clientName ?? order?.client ?? 'Sin cliente').trim()
+      const resolvedClient =
+        clientsById[orderClientId] ??
+        clientsByName[fallbackName.toLowerCase()] ??
+        null
+      const clientName = String(resolvedClient?.name ?? fallbackName ?? 'Sin cliente')
+
+      const deliveryDays = getDaysSinceDelivery(order?.deliveryDate)
+      const daysSinceDebt = Number.isInteger(deliveryDays)
+        ? deliveryDays
+        : getDaysSinceTimestamp(order?.createdAt)
+
+      const row = {
+        orderId,
+        displayOrderId: formatOrderId(orderId),
+        remainingDebt,
+        daysSinceDebt,
+      }
+
+      if (!acc[clientKey]) {
+        acc[clientKey] = {
+          key: clientKey,
+          clientId: orderClientId,
+          clientName,
+          clientEntity: resolvedClient,
+          creditBalance: Number(resolvedClient?.creditBalance || 0),
+          totalDebt: 0,
+          maxDays: 0,
+          rows: [],
+        }
+      }
+
+      acc[clientKey].totalDebt += remainingDebt
+      acc[clientKey].maxDays = Math.max(acc[clientKey].maxDays, daysSinceDebt)
+      acc[clientKey].rows.push(row)
+
+      return acc
+    }, {})
+
+    return Object.values(clientsMap)
+      .map((client) => ({
+        ...client,
+        rows: client.rows.toSorted((a, b) => {
+          if (b.daysSinceDebt !== a.daysSinceDebt) return b.daysSinceDebt - a.daysSinceDebt
+          return b.remainingDebt - a.remainingDebt
+        }),
+      }))
+      .toSorted((a, b) => {
+        if (b.maxDays !== a.maxDays) return b.maxDays - a.maxDays
+        return b.totalDebt - a.totalDebt
+      })
+  }, [clientsById, clientsByName, orderFinancialMap, safeOrders])
+
+  const collectionsSummary = useMemo(() => {
+    const totalDebt = collectionClients.reduce((acc, client) => acc + Number(client.totalDebt || 0), 0)
+    const clientsWithOldDebt = collectionClients.filter((client) => Number(client.maxDays || 0) > 10).length
+
+    return {
+      clientsCount: collectionClients.length,
+      totalDebt,
+      clientsWithOldDebt,
+    }
+  }, [collectionClients])
+
   useEffect(() => {
     if (!initialExpandedOrderId) return
 
@@ -576,10 +685,38 @@ function OrdersList({
     }
   }, [collapsedSections])
 
+  useEffect(() => {
+    return () => {
+      if (collectingFeedbackTimeoutRef.current) {
+        clearTimeout(collectingFeedbackTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (hasAutoScrolledCriticalRef.current) return
+
+    const firstCriticalClient = collectionClients.find((client) => Number(client.maxDays || 0) > 10)
+    if (!firstCriticalClient) return
+
+    const cardNode = collectionCardRefs.current[firstCriticalClient.key]
+    if (!cardNode || typeof cardNode.scrollIntoView !== 'function') return
+
+    hasAutoScrolledCriticalRef.current = true
+    cardNode.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [collectionClients])
+
   const toggleSection = (sectionKey) => {
     setCollapsedSections((prev) => ({
       ...prev,
       [sectionKey]: !prev[sectionKey],
+    }))
+  }
+
+  const toggleCollectionClient = (clientKey) => {
+    setExpandedCollectionClients((prev) => ({
+      ...prev,
+      [clientKey]: !prev[clientKey],
     }))
   }
 
@@ -708,7 +845,7 @@ function OrdersList({
     handleCancelDeliveryConfirmation()
 
     void appConfirm('Entrega confirmada.\n¿Querés registrar un pago ahora?').then((shouldRegisterPaymentNow) => {
-      if (shouldRegisterPaymentNow) openPaymentQuickModal(targetOrderId)
+      if (shouldRegisterPaymentNow) openPaymentQuickModalForOrder(targetOrderId)
     })
   }
 
@@ -717,10 +854,12 @@ function OrdersList({
     handleCancelDeliveryConfirmation()
   }
 
-  const openPaymentQuickModal = (orderId) => {
+  const openPaymentQuickModalForOrder = (orderId) => {
     setPaymentQuickModal({
       isOpen: true,
       orderId,
+      mode: 'order',
+      clientKey: '',
     })
 
     setPaymentDrafts((prevDrafts) => {
@@ -735,47 +874,232 @@ function OrdersList({
     })
   }
 
+  const openPaymentQuickModalForClient = (client) => {
+    const oldestOrderId = String(client?.rows?.[0]?.orderId ?? '').trim()
+    if (!oldestOrderId) return
+
+    setPaymentQuickModal({
+      isOpen: true,
+      orderId: oldestOrderId,
+      mode: 'client',
+      clientKey: String(client?.key ?? ''),
+    })
+
+    setPaymentDrafts((prevDrafts) => {
+      if (prevDrafts[oldestOrderId]) return prevDrafts
+      return {
+        ...prevDrafts,
+        [oldestOrderId]: {
+          amount: '',
+          method: paymentMethods[0],
+        },
+      }
+    })
+  }
+
   const handleClosePaymentQuickModal = () => {
     setPaymentQuickModal({
       isOpen: false,
       orderId: '',
+      mode: 'order',
+      clientKey: '',
     })
   }
+
+  const paymentQuickClient = useMemo(
+    () =>
+      paymentQuickModal.mode === 'client'
+        ? collectionClients.find((client) => client.key === paymentQuickModal.clientKey) ?? null
+        : null,
+    [collectionClients, paymentQuickModal.clientKey, paymentQuickModal.mode],
+  )
 
   const paymentQuickOrder = useMemo(
     () => safeOrders.find((order) => String(order?.id ?? '') === String(paymentQuickModal.orderId ?? '')) ?? null,
     [paymentQuickModal.orderId, safeOrders],
   )
 
-  const paymentQuickSummary = useMemo(
-    () => (paymentQuickOrder ? getOrderFinancialSummary(paymentQuickOrder) : null),
-    [paymentQuickOrder],
-  )
+  const paymentQuickSummary = useMemo(() => {
+    if (paymentQuickModal.mode === 'client') {
+      if (!paymentQuickClient) return null
+
+      const totalPaid = paymentQuickClient.rows.reduce((acc, row) => {
+        return acc + Number(orderFinancialMap[String(row.orderId)]?.totalPaid || 0)
+      }, 0)
+
+      return {
+        totalPaid,
+        remainingDebt: Number(paymentQuickClient.totalDebt || 0),
+      }
+    }
+
+    return paymentQuickOrder ? getOrderFinancialSummary(paymentQuickOrder) : null
+  }, [orderFinancialMap, paymentQuickClient, paymentQuickModal.mode, paymentQuickOrder])
+
+  const paymentQuickTitle =
+    paymentQuickModal.mode === 'client' && paymentQuickClient
+      ? `Cobrar saldo total de ${paymentQuickClient.clientName}`
+      : ''
+
+  const paymentQuickConfirmLabel = paymentQuickModal.mode === 'client'
+    ? 'Agregar pago y distribuir'
+    : 'Agregar pago'
+
+  const applyAutomaticClientCollection = ({
+    client,
+    paymentAmount,
+    method,
+    note,
+    closeModal = false,
+  }) => {
+    if (!client) return
+
+    setCollectingClientKey(client.key)
+
+    if (collectingFeedbackTimeoutRef.current) {
+      clearTimeout(collectingFeedbackTimeoutRef.current)
+    }
+
+    collectingFeedbackTimeoutRef.current = setTimeout(() => {
+      const knownClient = client.clientEntity ?? null
+      const currentCredit = Math.max(Number(knownClient?.creditBalance || 0), 0)
+      const safePaymentAmount = Math.max(Number(paymentAmount || 0), 0)
+      const distributableAmount = safePaymentAmount + currentCredit
+      if (distributableAmount <= 0) {
+        setCollectingClientKey('')
+        return
+      }
+
+      const allocationResult = onRegisterClientPayment?.({
+        clientId: client.clientId,
+        clientName: client.clientName,
+        amount: distributableAmount,
+        method,
+        note,
+      })
+
+      if (allocationResult) {
+        const nextCredit = Math.max(Number(allocationResult.overpayCredit || 0), 0)
+
+        onSaveClient?.({
+          id: String(knownClient?.id ?? client.clientId ?? '').trim() || undefined,
+          name: String(knownClient?.name ?? client.clientName ?? 'Sin cliente').trim(),
+          phone: String(knownClient?.phone ?? ''),
+          email: String(knownClient?.email ?? ''),
+          address: String(knownClient?.address ?? ''),
+          notes: String(knownClient?.notes ?? ''),
+          observations: Array.isArray(knownClient?.observations) ? knownClient.observations : [],
+          creditBalance: nextCredit,
+          paymentAllocations: [
+            {
+              id: String(allocationResult.allocationBatchId ?? `CPAY-${Date.now()}`),
+              amount: Number(allocationResult.paymentAmount || 0),
+              method: String(allocationResult.method ?? method),
+              createdAt: String(allocationResult.createdAt ?? new Date().toISOString()),
+              note: String(allocationResult.note ?? ''),
+              overpayCredit: Number(allocationResult.overpayCredit || 0),
+              allocations: Array.isArray(allocationResult.allocations) ? allocationResult.allocations : [],
+            },
+            ...(Array.isArray(knownClient?.paymentAllocations) ? knownClient.paymentAllocations : []),
+          ],
+        })
+
+        const lines = [
+          'Pago aplicado:',
+          ...(Array.isArray(allocationResult.allocations)
+            ? allocationResult.allocations.map((allocation) => {
+                const orderId = String(allocation?.orderId ?? '')
+                const amount = Number(allocation?.amount || 0)
+                const originalDebt = Number(
+                  client.rows.find((row) => String(row.orderId) === orderId)?.remainingDebt || 0,
+                )
+                const status = amount >= originalDebt ? 'completo' : 'parcial'
+                return `- ${formatOrderId(orderId)} -> ${formatCurrency(amount)} (${status})`
+              })
+            : []),
+          `Total aplicado: ${formatCurrency(Number(allocationResult.totalApplied || 0))}`,
+        ]
+
+        if (safePaymentAmount > 0) {
+          lines.push(`Pago ingresado: ${formatCurrency(safePaymentAmount)}`)
+        }
+
+        if (currentCredit > 0) {
+          lines.push(`Saldo a favor aplicado: ${formatCurrency(currentCredit)}`)
+        }
+
+        if (Number(allocationResult.overpayCredit || 0) > 0) {
+          lines.push(`Saldo a favor generado: ${formatCurrency(Number(allocationResult.overpayCredit || 0))}`)
+        }
+
+        void appAlert(lines.join('\n'))
+      }
+
+      if (closeModal) {
+        handleClosePaymentQuickModal()
+      }
+
+      collectingFeedbackTimeoutRef.current = setTimeout(() => {
+        setCollectingClientKey('')
+      }, 850)
+    }, 180)
+  }
 
   const handleQuickPaymentConfirm = ({ amount, method }) => {
-    const targetOrderId = String(paymentQuickModal.orderId ?? '').trim()
-    if (!targetOrderId || !paymentQuickSummary) return
+    if (!paymentQuickSummary) return
 
     const safeAmount = Number(amount)
     const remainingDebt = Number(paymentQuickSummary.remainingDebt || 0)
 
     if (Number.isNaN(safeAmount) || safeAmount <= 0) return
-    if (safeAmount > remainingDebt) return
+    if (paymentQuickModal.mode !== 'client' && safeAmount > remainingDebt) return
 
-    onRegisterPayment?.(targetOrderId, {
-      amount: safeAmount,
-      method,
-    })
+    if (paymentQuickModal.mode === 'client') {
+      if (!paymentQuickClient) return
 
-    setPaymentDrafts((prevDrafts) => ({
-      ...prevDrafts,
-      [targetOrderId]: {
-        amount: '',
-        method: method || paymentMethods[0],
-      },
-    }))
+      applyAutomaticClientCollection({
+        client: paymentQuickClient,
+        paymentAmount: safeAmount,
+        method,
+        note:
+          Number(paymentQuickClient.clientEntity?.creditBalance || 0) > 0
+            ? 'Pago automático imputado por deuda total de cliente (incluye saldo a favor previo).'
+            : 'Pago automático imputado por deuda total de cliente.',
+        closeModal: true,
+      })
 
-    handleClosePaymentQuickModal()
+      return
+    }
+
+    const targetOrderId = String(paymentQuickModal.orderId ?? '').trim()
+    if (!targetOrderId || !paymentQuickSummary) return
+
+    setCollectingOrderId(targetOrderId)
+
+    if (collectingFeedbackTimeoutRef.current) {
+      clearTimeout(collectingFeedbackTimeoutRef.current)
+    }
+
+    collectingFeedbackTimeoutRef.current = setTimeout(() => {
+      onRegisterPayment?.(targetOrderId, {
+        amount: safeAmount,
+        method,
+      })
+
+      setPaymentDrafts((prevDrafts) => ({
+        ...prevDrafts,
+        [targetOrderId]: {
+          amount: '',
+          method: method || paymentMethods[0],
+        },
+      }))
+
+      handleClosePaymentQuickModal()
+
+      collectingFeedbackTimeoutRef.current = setTimeout(() => {
+        setCollectingOrderId('')
+      }, 850)
+    }, 180)
   }
 
   const deliveryConfirmTarget = useMemo(
@@ -895,12 +1219,8 @@ function OrdersList({
             </tr>
           </thead>
           <tbody>
-            {groupedSections.map((section) => {
+            {operationalSections.map((section) => {
               const isCollapsed = Boolean(collapsedSections[section.key])
-              const debtLabel =
-                section.key === 'collections' && section.totalDebt > 0
-                  ? ` · ${formatCurrency(section.totalDebt)} pendientes`
-                  : ''
 
               return (
                 <Fragment key={section.key}>
@@ -917,7 +1237,7 @@ function OrdersList({
                           <span>{section.title}</span>
                           <span className="orders-section-count">{section.count}</span>
                         </span>
-                        <span className="orders-section-description">{section.description}{debtLabel}</span>
+                        <span className="orders-section-description">{section.description}</span>
                       </button>
                     </td>
                   </tr>
@@ -1087,7 +1407,7 @@ function OrdersList({
                 }
 
                 if (isDeliveredWithDebt) {
-                  openPaymentQuickModal(orderId)
+                  openPaymentQuickModalForOrder(orderId)
                 }
               }
 
@@ -1509,7 +1829,7 @@ function OrdersList({
                             </tbody>
                           </table>
 
-                          {!order.isSample && (
+                          {!order.isSample && orderStatus !== 'Entregado' && (
                             <div className="order-items-edit-card">
                               {!isEditingItems ? (
                                 <button
@@ -1980,6 +2300,146 @@ function OrdersList({
         </table>
       </div>
 
+      <section className="collections-compact-zone" aria-label="Resumen de cobranzas">
+        <div className="collections-compact-head">
+          <h4>
+            💰 Por cobrar ({collectionsSummary.clientsCount} clientes · {formatCurrency(collectionsSummary.totalDebt)})
+          </h4>
+          {collectionsSummary.clientsWithOldDebt > 0 && (
+            <p className="collections-compact-alert">
+              ⚠ Tenés {collectionsSummary.clientsWithOldDebt} cliente(s) con deuda mayor a 10 días.
+            </p>
+          )}
+        </div>
+
+        {collectionClients.length === 0 ? (
+          <div className="collections-compact-empty">
+            No hay deudas pendientes. Todo lo entregado está al día.
+          </div>
+        ) : (
+          <div className="collections-compact-grid">
+            {collectionClients.map((client) => {
+              const isExpanded = Boolean(expandedCollectionClients[client.key])
+              const oldestOrder = client.rows[0] ?? null
+              const clientCredit = Math.max(Number(client.creditBalance || 0), 0)
+              const hasCollectingFeedback = client.rows.some((row) => row.orderId === collectingOrderId)
+              const cardAgingClassName = getDebtAgingClassName(client.maxDays)
+              const criticalTooltip = client.maxDays > 10 ? 'Deuda mayor a 10 días' : undefined
+
+              const handleQuickCollect = (event) => {
+                event.stopPropagation()
+                openPaymentQuickModalForClient(client)
+              }
+
+              const handleUseCreditOnly = (event) => {
+                event.stopPropagation()
+                if (clientCredit <= 0) return
+
+                applyAutomaticClientCollection({
+                  client,
+                  paymentAmount: 0,
+                  method: 'Transferencia',
+                  note: 'Aplicación directa de saldo a favor sin ingreso de pago nuevo.',
+                  closeModal: false,
+                })
+              }
+
+              const cardCollecting = collectingClientKey === client.key
+              const hasCollectingCardFeedback = hasCollectingFeedback || cardCollecting
+
+              return (
+                <article
+                  key={client.key}
+                  ref={(node) => {
+                    if (node) {
+                      collectionCardRefs.current[client.key] = node
+                    } else {
+                      delete collectionCardRefs.current[client.key]
+                    }
+                  }}
+                  className={`collections-client-card ${cardAgingClassName} ${hasCollectingCardFeedback ? 'collections-client-card-collecting' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  title={criticalTooltip}
+                  onClick={() => toggleCollectionClient(client.key)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      toggleCollectionClient(client.key)
+                    }
+                  }}
+                  aria-expanded={isExpanded}
+                >
+                  <div className="collections-client-head">
+                    <div>
+                      <h5>{client.clientName}</h5>
+                      <p>
+                        {client.rows.length} pedido(s) · más viejo hace {client.maxDays} {client.maxDays === 1 ? 'día' : 'días'}
+                      </p>
+                      {oldestOrder && (
+                        <p className="collections-client-oldest-hint">
+                          Distribución automática: se aplica de {oldestOrder.displayOrderId} en adelante.
+                        </p>
+                      )}
+                    </div>
+                    <div className="collections-client-actions">
+                      <strong>{formatCurrency(client.totalDebt)}</strong>
+                      {clientCredit > 0 && (
+                        <span className="client-credit-badge">Saldo a favor {formatCurrency(clientCredit)}</span>
+                      )}
+                      <button
+                        type="button"
+                        className="quick-fill-btn"
+                        disabled={cardCollecting || clientCredit <= 0}
+                        aria-busy={cardCollecting}
+                        onClick={handleUseCreditOnly}
+                      >
+                        Usar saldo a favor
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        disabled={cardCollecting}
+                        aria-busy={cardCollecting}
+                        onClick={handleQuickCollect}
+                      >
+                        {cardCollecting ? 'Procesando...' : 'Cobrar deuda total'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="collections-client-orders">
+                      {client.rows.map((row) => (
+                        <div key={row.orderId} className="collections-client-order-row">
+                          <span>{row.displayOrderId}</span>
+                          <span>{formatCurrency(row.remainingDebt)}</span>
+                          <span>
+                            {row.daysSinceDebt} {row.daysSinceDebt === 1 ? 'día' : 'días'}
+                          </span>
+                          <button
+                            type="button"
+                            className="quick-fill-btn"
+                            disabled={collectingOrderId === row.orderId}
+                            aria-busy={collectingOrderId === row.orderId}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openPaymentQuickModalForOrder(row.orderId)
+                            }}
+                          >
+                            {collectingOrderId === row.orderId ? 'Procesando...' : 'Cobrar'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
       {deliveryConfirmModal.isOpen && typeof document !== 'undefined' && createPortal(
         <div
           className="modal-overlay"
@@ -2012,9 +2472,15 @@ function OrdersList({
       )}
 
       <QuickPaymentModal
+        key={`${paymentQuickModal.mode}-${paymentQuickModal.clientKey}-${paymentQuickModal.orderId}-${paymentQuickModal.isOpen ? 'open' : 'closed'}`}
         isOpen={paymentQuickModal.isOpen}
         order={paymentQuickOrder}
         summary={paymentQuickSummary}
+        title={paymentQuickTitle}
+        confirmLabel={paymentQuickConfirmLabel}
+        showReminder={paymentQuickModal.mode !== 'client'}
+        allowOverpay={paymentQuickModal.mode === 'client'}
+        clientName={paymentQuickClient?.clientName}
         onClose={handleClosePaymentQuickModal}
         onConfirm={handleQuickPaymentConfirm}
         onSendReminder={sendPaymentReminder}

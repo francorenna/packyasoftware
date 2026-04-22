@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const SUPPLIERS_STORAGE_KEY = 'packya_suppliers'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -63,6 +64,7 @@ const loadSuppliersFromStorage = () => {
 
 function useSuppliersState() {
   const [suppliers, setSuppliers] = useState(() => loadSuppliersFromStorage())
+  useCloudSnapshotSync('suppliers', suppliers)
 
   useEffect(() => {
     try {

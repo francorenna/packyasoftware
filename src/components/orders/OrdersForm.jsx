@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatOrderId } from '../../utils/orders'
 import { createDebouncedStorageWriter } from '../../utils/storageDebounce'
 import useAppDialog from '../../hooks/useAppDialog'
+import { CLOUD_SYNC_STATUS_EVENT, getCloudSyncStatus } from '../../utils/cloudSync'
 
 const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleOrderStatuses = ['Pendiente', 'Lista']
@@ -274,6 +275,8 @@ function OrdersForm({
       : {}),
   }))
   const [quickClientError, setQuickClientError] = useState('')
+  const [quickClientInfo, setQuickClientInfo] = useState('')
+  const [isCreatingQuickClient, setIsCreatingQuickClient] = useState(false)
   const [clientSearch, setClientSearch] = useState('')
   const [highlightedClientSuggestionIndex, setHighlightedClientSuggestionIndex] = useState(0)
   const [isClientSearchFocused, setIsClientSearchFocused] = useState(false)
@@ -287,6 +290,7 @@ function OrdersForm({
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [cloudStatus, setCloudStatus] = useState(() => getCloudSyncStatus())
   const itemsSectionRef = useRef(null)
 
   const normalizedSelectedCategory = useMemo(() => {
@@ -580,6 +584,24 @@ function OrdersForm({
     return () => clearTimeout(timer)
   }, [isModal])
 
+  useEffect(() => {
+    const refreshCloudStatus = () => {
+      setCloudStatus(getCloudSyncStatus())
+    }
+
+    window.addEventListener('online', refreshCloudStatus)
+    window.addEventListener('offline', refreshCloudStatus)
+    window.addEventListener('focus', refreshCloudStatus)
+    window.addEventListener(CLOUD_SYNC_STATUS_EVENT, refreshCloudStatus)
+
+    return () => {
+      window.removeEventListener('online', refreshCloudStatus)
+      window.removeEventListener('offline', refreshCloudStatus)
+      window.removeEventListener('focus', refreshCloudStatus)
+      window.removeEventListener(CLOUD_SYNC_STATUS_EVENT, refreshCloudStatus)
+    }
+  }, [])
+
   const resetForm = () => {
     const today = getTodayDateInput()
     setClientId('')
@@ -598,6 +620,8 @@ function OrdersForm({
     setIsQuickCreateClientOpen(false)
     setQuickClientForm(createInitialQuickClientForm())
     setQuickClientError('')
+    setQuickClientInfo('')
+    setIsCreatingQuickClient(false)
     setClientSearch('')
     setHighlightedClientSuggestionIndex(0)
     setProductSearch('')
@@ -827,6 +851,7 @@ function OrdersForm({
   const handleQuickClientInput = (field, value) => {
     setQuickClientForm((prev) => ({ ...prev, [field]: value }))
     if (quickClientError) setQuickClientError('')
+    if (quickClientInfo) setQuickClientInfo('')
   }
 
   const selectClientFromSearch = (selectedClientId) => {
@@ -840,6 +865,8 @@ function OrdersForm({
   }
 
   const handleQuickCreateClient = async () => {
+    if (isCreatingQuickClient) return
+
     const normalizedName = String(quickClientForm.name ?? '').trim()
     if (!normalizedName) {
       setQuickClientError('Ingresá un nombre para crear el cliente.')
@@ -847,6 +874,10 @@ function OrdersForm({
     }
 
     try {
+      setIsCreatingQuickClient(true)
+      setQuickClientError('')
+      setQuickClientInfo('')
+
       const created = await Promise.resolve(
         onCreateClient?.({
           name: normalizedName,
@@ -860,13 +891,16 @@ function OrdersForm({
         setClientId(created.id)
         setQuickClientForm(createInitialQuickClientForm())
         setQuickClientError('')
+        setQuickClientInfo('Cliente guardado localmente. La nube se sincroniza en segundo plano.')
         setIsQuickCreateClientOpen(false)
         return
       }
 
-      setQuickClientError('No se pudo crear el cliente. Intentá nuevamente.')
+      setQuickClientInfo('No se pudo confirmar la creación en este intento. Probá continuar: el guardado local puede aplicarse en segundos.')
     } catch {
-      setQuickClientError('Ocurrió un error al crear el cliente.')
+      setQuickClientError('No se pudo crear ahora. Tus datos locales siguen protegidos y podés reintentar.')
+    } finally {
+      setIsCreatingQuickClient(false)
     }
   }
 
@@ -964,6 +998,38 @@ function OrdersForm({
   const sampleNameError = submitAttempted && isSample && !String(sampleClientName ?? '').trim()
   const itemsError = submitAttempted && items.filter((item) => item.productId).length === 0
 
+  const cloudVisualState = (() => {
+    if (!cloudStatus.configured) {
+      return {
+        className: 'cloud-status-unconfigured',
+        label: 'Nube no configurada',
+        detail: 'Modo local activo.',
+      }
+    }
+
+    if (!cloudStatus.online) {
+      return {
+        className: 'cloud-status-offline',
+        label: 'Sin internet',
+        detail: 'Guardado local activo; sincroniza al reconectar.',
+      }
+    }
+
+    if (cloudStatus.pendingCount > 0 || cloudStatus.processing) {
+      return {
+        className: 'cloud-status-syncing',
+        label: 'Sincronizando',
+        detail: `${cloudStatus.pendingCount} cambio(s) en cola`,
+      }
+    }
+
+    return {
+      className: 'cloud-status-online',
+      label: 'Nube conectada',
+      detail: 'Sincronización al día.',
+    }
+  })()
+
   return (
     <section className={isModal ? undefined : 'card-block'}>
       {!isModal && (
@@ -974,6 +1040,14 @@ function OrdersForm({
       )}
 
       <form id={formId} className="order-form" onSubmit={handleSubmit}>
+        <section className={`cloud-status-widget order-form-cloud-status ${cloudVisualState.className}`} aria-live="polite">
+          <div className="cloud-status-headline">
+            <span className="cloud-status-dot" aria-hidden="true" />
+            <strong>{cloudVisualState.label}</strong>
+          </div>
+          <p>{cloudVisualState.detail}</p>
+        </section>
+
         <label>
           <input
             type="checkbox"
@@ -1100,6 +1174,7 @@ function OrdersForm({
                 onClick={() => {
                   setIsQuickCreateClientOpen((prev) => !prev)
                   setQuickClientError('')
+                  setQuickClientInfo('')
                   if (isQuickCreateClientOpen) {
                     setQuickClientForm(createInitialQuickClientForm())
                   }
@@ -1139,12 +1214,18 @@ function OrdersForm({
                   onChange={(event) => handleQuickClientInput('notes', event.target.value)}
                   placeholder="Notas"
                 />
-                <button type="button" className="primary-btn" onClick={handleQuickCreateClient}>
-                  Crear cliente
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={handleQuickCreateClient}
+                  disabled={isCreatingQuickClient}
+                >
+                  {isCreatingQuickClient ? 'Creando...' : 'Crear cliente'}
                 </button>
               </>
             )}
             {quickClientError && <p className="payment-error">{quickClientError}</p>}
+            {quickClientInfo && <p className="payment-helper">{quickClientInfo}</p>}
             {safeClients.length > 0 && String(clientSearch ?? '').trim() && filteredClients.length === 0 && (
               <p className="payment-helper">Sin resultados para esa búsqueda.</p>
             )}

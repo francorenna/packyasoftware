@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const EXPENSES_STORAGE_KEY = 'packya_expenses'
 const EXPENSE_TYPES = ['empresa', 'socio']
@@ -97,6 +98,7 @@ const loadExpenses = () => {
 
 function useExpensesState() {
   const [expenses, setExpenses] = useState(() => loadExpenses())
+  useCloudSnapshotSync('expenses', expenses)
 
   useEffect(() => {
     try {

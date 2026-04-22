@@ -1,7 +1,4 @@
-const toPositiveNumber = (value) => {
-  const parsed = Number(value)
-  return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed
-}
+import { getOrderFinancialSummary } from './finance'
 
 const getOrderClientId = (order, clientNameIndex) => {
   if (order?.clientId) return String(order.clientId)
@@ -41,17 +38,17 @@ export const getClientStatsMap = (clients, orders) => {
   safeOrders.forEach((order) => {
     const clientId = getOrderClientId(order, clientNameIndex)
     if (!clientId || !stats[clientId]) return
+    if (order.isSample === true) return
 
-    const total = toPositiveNumber(order.total)
-    const totalPagado = (Array.isArray(order.payments) ? order.payments : []).reduce(
-      (acc, payment) => acc + toPositiveNumber(payment.amount),
-      0,
-    )
-    const totalPendiente = Math.max(total - totalPagado, 0)
+    const financial = getOrderFinancialSummary(order)
+    const isCancelled = String(order.status ?? '') === 'Cancelado'
+    const totalFacturado = isCancelled ? 0 : financial.finalTotal
+    const totalPagado = isCancelled ? 0 : financial.totalPaid
+    const totalPendiente = isCancelled ? 0 : financial.remainingDebt
     const orderDate = String(order.deliveryDate ?? '')
 
     const current = stats[clientId]
-    current.totalFacturado += total
+    current.totalFacturado += totalFacturado
     current.totalPagado += totalPagado
     current.totalPendiente += totalPendiente
     current.orders.push(order)

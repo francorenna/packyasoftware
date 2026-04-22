@@ -58,7 +58,18 @@ const getOrderFinancialSummary = (order) => {
     (acc, payment) => acc + toPositiveNumber(payment?.amount),
     0,
   )
-  const remainingDebt = Math.max(finalTotal - totalPaid, 0)
+  const rawDebt = finalTotal - totalPaid
+  // Sobrepago: el cliente pagó más de lo facturado. No es un error operativo
+  // (puede pasar por redondeos o pagos anticipados) pero lo registramos para
+  // detectar inconsistencias de datos antes de migrar a cloud.
+  const overpayment = rawDebt < 0 ? Math.abs(rawDebt) : 0
+  if (overpayment > 0) {
+    console.warn(
+      `[finance] Sobrepago detectado en pedido ${String(order?.id ?? 'desconocido')}: ` +
+        `pagado $${totalPaid} > total $${finalTotal} (diferencia $${overpayment})`,
+    )
+  }
+  const remainingDebt = Math.max(rawDebt, 0)
 
   let financialStatus = 'Parcial'
   if (totalPaid <= 0) financialStatus = 'Pendiente'
@@ -75,6 +86,7 @@ const getOrderFinancialSummary = (order) => {
     baseTotal,
     finalTotal,
     totalPaid,
+    overpayment,
     remainingDebt,
     financialStatus,
   }

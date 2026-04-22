@@ -10,9 +10,12 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:electron": "concurrently \"vite\" \"electron .\"",
-    "build:app": "vite build && electron-builder --win nsis"
+    "build:app": "vite build && electron-builder --win nsis",
+    "build:app:test": "cross-env VITE_APP_ENV=testing vite build --mode testing && electron-builder --win nsis --config.appId=\"com.packya.gestion.test\" --config.productName=\"Packya Gestion TEST\" --config.directories.output=release_test",
+    "build:app:prod": "cross-env VITE_APP_ENV=production vite build --mode production && electron-builder --win nsis --config.appId=\"com.packya.gestion.prod\" --config.productName=\"Packya Gestion PROD\" --config.directories.output=release_prod"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.103.3",
     "jspdf": "^4.1.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
@@ -25,6 +28,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
     "electron": "^38.1.2",
     "electron-builder": "^26.0.12",
     "eslint": "^9.39.1",

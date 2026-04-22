@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getClientsWithDebtCount } from '../utils/clients'
 import { calculateStockSnapshot } from '../utils/stock'
-import { calculateFinanceSummary, getCurrentMonthKey, getSampleMetrics } from '../utils/finance'
+import { calculateFinanceSummary, getCurrentMonthKey, getOrderFinancialSummary, getSampleMetrics } from '../utils/finance'
 import { getDashboardProductionMetrics } from '../utils/production'
 import { formatOrderId } from '../utils/orders'
 
@@ -50,16 +50,17 @@ function DashboardPage({ orders, products, clients, purchases, expenses }) {
 
     return safeOrders.reduce(
       (acc, order) => {
-        const total = Number(order.total || 0)
-        const totalPaid = (Array.isArray(order.payments) ? order.payments : []).reduce(
-          (sum, payment) => sum + Number(payment.amount || 0),
-          0,
-        )
-        const pending = Math.max(total - totalPaid, 0)
+        if (order.isSample === true) return acc
+
+        const financial = getOrderFinancialSummary(order)
+        const isCancelled = String(order.status ?? '') === 'Cancelado'
+        const invoiced = isCancelled ? 0 : financial.finalTotal
+        const collected = isCancelled ? 0 : financial.totalPaid
+        const pending = isCancelled ? 0 : financial.remainingDebt
 
         return {
-          totalInvoiced: acc.totalInvoiced + total,
-          totalCollected: acc.totalCollected + totalPaid,
+          totalInvoiced: acc.totalInvoiced + invoiced,
+          totalCollected: acc.totalCollected + collected,
           totalPending: acc.totalPending + pending,
           ordersToday:
             acc.ordersToday + (order.deliveryDate === todayKey ? 1 : 0),

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const MANUAL_PURCHASE_LISTS_STORAGE_KEY = 'packya_manual_purchase_lists'
 const allowedStatuses = ['Pendiente', 'Convertida', 'Cancelada']
@@ -79,6 +80,7 @@ const loadManualPurchaseLists = () => {
 
 function useManualPurchaseListsState(onCreatePurchaseFromList) {
   const [manualPurchaseLists, setManualPurchaseLists] = useState(() => loadManualPurchaseLists())
+  useCloudSnapshotSync('manual_purchase_lists', manualPurchaseLists)
 
   useEffect(() => {
     try {

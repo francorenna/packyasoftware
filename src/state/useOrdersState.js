@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createDebouncedStorageWriter } from '../utils/storageDebounce'
 import { getOrderFinancialSummary } from '../utils/finance'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const ORDERS_STORAGE_KEY = 'packya_orders'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -152,6 +153,12 @@ const applyAutoArchive = (order) => {
 const normalizeOrder = (order, index) => {
   if (!order || typeof order !== 'object') return null
 
+  const normalizedCreatedAt =
+    toIsoString(order.createdAt) ||
+    toIsoString(order.productionDate) ||
+    toDateOnlyIso(typeof order.deliveryDate === 'string' ? order.deliveryDate : '') ||
+    '2000-01-01T00:00:00.000Z'
+
   const safeItems = Array.isArray(order.items)
     ? order.items
         .map((item) => {
@@ -182,7 +189,7 @@ const normalizeOrder = (order, index) => {
             id: String(payment.id ?? `PAY-${index + 1}-${paymentIndex + 1}`),
             amount: toPositiveNumber(payment.amount),
             method,
-            date: String(payment.date ?? new Date().toISOString()),
+            date: toIsoString(payment.date) || normalizedCreatedAt,
             note: String(payment.note ?? '').trim(),
           }
         })
@@ -201,7 +208,7 @@ const normalizeOrder = (order, index) => {
             id: String(adjustment.id ?? `ADJ-${index + 1}-${adjustmentIndex + 1}`),
             amount,
             note: String(adjustment.note ?? adjustment.reason ?? '').trim(),
-            date: String(adjustment.date ?? new Date().toISOString()),
+            date: toIsoString(adjustment.date) || normalizedCreatedAt,
           }
         })
         .filter(Boolean)
@@ -215,12 +222,10 @@ const normalizeOrder = (order, index) => {
     return regularStatuses.includes(order.status) ? order.status : regularStatuses[0]
   })()
 
-  const normalizedCreatedAt = String(order.createdAt ?? new Date().toISOString())
   const normalizedProductionDate =
     toIsoString(order.productionDate) ||
     toDateOnlyIso(typeof order.productionDate === 'string' ? order.productionDate : '') ||
-    toIsoString(normalizedCreatedAt) ||
-    new Date().toISOString()
+    normalizedCreatedAt
 
   const normalizedArchivedAt = (() => {
     if (order.archivedAt === null) return null
@@ -293,6 +298,26 @@ const loadOrdersFromStorage = () => {
       .filter(Boolean)
       .map((order) => applyAutoArchive(order))
 
+    // Consistency check: warn if stored order.total diverges from computed
+    // subtotal of items. Fires only in dev or when the flag is set in storage.
+    // Does NOT block load — purely diagnostic for pre-cloud data audit.
+    if (import.meta.env.DEV || localStorage.getItem('packya_audit_log') === '1') {
+      normalizedOrders.forEach((order) => {
+        if (order.isSample || String(order.status ?? '') === 'Cancelado') return
+        const computedSubtotal = (Array.isArray(order.items) ? order.items : []).reduce(
+          (acc, item) => acc + Number(item.quantity || 0) * Number(item.unitPrice || 0),
+          0,
+        )
+        if (computedSubtotal > 0 && Math.abs(order.total - computedSubtotal) > 1) {
+          console.warn(
+            `[orders:audit] Pedido ${order.id}: total almacenado $${order.total} ` +
+              `difiere del subtotal calculado $${computedSubtotal} ` +
+              `(diff $${Math.abs(order.total - computedSubtotal).toFixed(2)})`,
+          )
+        }
+      })
+    }
+
     return normalizedOrders
   } catch {
     return []
@@ -301,6 +326,7 @@ const loadOrdersFromStorage = () => {
 
 function useOrdersState() {
   const [orders, setOrders] = useState(() => loadOrdersFromStorage())
+  useCloudSnapshotSync('orders', orders)
   const ordersStorageWriter = useMemo(
     () => createDebouncedStorageWriter({
       key: ORDERS_STORAGE_KEY,

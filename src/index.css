@@ -236,6 +236,29 @@ input[type='number']:focus {
   font-weight: 700;
 }
 
+.env-badge {
+  display: inline-flex;
+  margin-left: 0.5rem;
+  padding: 0.08rem 0.36rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+}
+
+.env-badge-test {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.env-badge-prod {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
 .sidebar-title p {
   margin: 0.35rem 0 0;
   color: #64748b;
@@ -256,6 +279,121 @@ input[type='number']:focus {
   opacity: 0.65;
   text-align: center;
   padding-top: 0.75rem;
+}
+
+.cloud-status-widget {
+  margin-top: 1rem;
+  border-radius: 0.8rem;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+}
+
+.cloud-status-headline {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.83rem;
+  color: #1e3a8a;
+}
+
+.cloud-status-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 999px;
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.15);
+}
+
+.cloud-status-widget p {
+  margin: 0.28rem 0 0;
+  font-size: 0.76rem;
+  color: #334155;
+}
+
+.order-form-cloud-status {
+  margin: 0 0 0.2rem;
+}
+
+.order-form-cloud-status .cloud-status-headline {
+  font-size: 0.8rem;
+}
+
+.order-form-cloud-status p {
+  font-size: 0.74rem;
+}
+
+.cloud-status-online {
+  border-color: #86efac;
+  background: #ecfdf3;
+}
+
+.cloud-status-online .cloud-status-headline {
+  color: #166534;
+}
+
+.cloud-status-online .cloud-status-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.15);
+}
+
+.cloud-status-syncing {
+  border-color: #facc15;
+  background: #fff9db;
+}
+
+.cloud-status-syncing .cloud-status-headline {
+  color: #854d0e;
+}
+
+.cloud-status-syncing .cloud-status-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+  animation: cloud-sync-pulse 1.25s ease-in-out infinite;
+}
+
+.cloud-status-offline {
+  border-color: #fca5a5;
+  background: #fff1f2;
+}
+
+.cloud-status-offline .cloud-status-headline {
+  color: #9f1239;
+}
+
+.cloud-status-offline .cloud-status-dot {
+  background: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+}
+
+.cloud-status-unconfigured {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.cloud-status-unconfigured .cloud-status-headline {
+  color: #334155;
+}
+
+.cloud-status-unconfigured .cloud-status-dot {
+  background: #64748b;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.13);
+}
+
+@keyframes cloud-sync-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
 }
 
 .nav-item {
@@ -318,6 +456,161 @@ input[type='number']:focus {
   border-color: #86efac;
   background: #dcfce7;
   color: #166534;
+}
+
+.db-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.db-connection-pill {
+  border-radius: 999px;
+  padding: 0.3rem 0.62rem;
+  border: 1px solid transparent;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.db-connection-pill-good {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.db-connection-pill-warn {
+  color: #854d0e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.db-connection-pill-bad {
+  color: #9f1239;
+  background: #ffe4e6;
+  border-color: #fda4af;
+}
+
+.db-connection-pill-neutral {
+  color: #334155;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.db-actions-row {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.db-last-check {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.db-runtime-alert {
+  margin-top: 0.9rem;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+}
+
+.db-runtime-alert strong {
+  color: #7c2d12;
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.db-runtime-alert p {
+  margin: 0;
+  color: #7c2d12;
+  font-size: 0.88rem;
+}
+
+.db-runtime-alert small {
+  display: block;
+  margin-top: 0.45rem;
+  color: #92400e;
+}
+
+.db-table-wrap {
+  margin-top: 1rem;
+  overflow: auto;
+}
+
+.db-trace-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 980px;
+  text-align: left;
+}
+
+.db-trace-table thead th {
+  background: #f8fafc;
+  color: #0f172a;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.58rem;
+  font-size: 0.8rem;
+}
+
+.db-trace-table tbody td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.55rem;
+  vertical-align: top;
+  font-size: 0.86rem;
+  color: #1e293b;
+}
+
+.db-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid transparent;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.db-sync-pill-good {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.db-sync-pill-warn {
+  color: #854d0e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.db-sync-pill-bad {
+  color: #9f1239;
+  background: #ffe4e6;
+  border-color: #fda4af;
+}
+
+.db-dates-cell {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.db-dates-cell small {
+  color: #475569;
+}
+
+.db-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.db-empty-row {
+  text-align: center;
+  color: #64748b;
 }
 
 .save-indicator {

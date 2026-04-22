@@ -4,6 +4,7 @@ import AppLayout from './layout/AppLayout'
 import ArchivedOrdersPage from './pages/ArchivedOrdersPage'
 import ClientsPage from './pages/ClientsPage'
 import DashboardPage from './pages/DashboardPage'
+import DatabaseStatusPage from './pages/DatabaseStatusPage'
 import FinancePage from './pages/FinancePage'
 import ManualPurchaseListsPage from './pages/ManualPurchaseListsPage'
 import OrdersPage from './pages/OrdersPage'
@@ -23,8 +24,37 @@ import useQuotesState from './state/useQuotesState'
 import useSuppliersState from './state/useSuppliersState'
 import { getOrderFinancialSummary } from './utils/finance'
 import { calculateStockSnapshot } from './utils/stock'
+import {
+  applyCloudPayloadToLocal,
+  buildCloudLocalDiffReport,
+  forceUpsertCloudSnapshot,
+} from './utils/cloudSync'
+import { isSupabaseConfigured } from './integrations/supabaseClient'
 
 const HIGH_DEBT_THRESHOLD = 250000
+
+const ENTITY_LABEL_MAP = {
+  orders: 'Pedidos',
+  products: 'Productos',
+  clients: 'Clientes',
+  purchases: 'Compras',
+  suppliers: 'Proveedores',
+  manual_purchase_lists: 'Listas de compra',
+  expenses: 'Gastos',
+  quotes: 'Presupuestos',
+}
+
+const formatSyncDate = (value) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'Sin fecha'
+  return parsed.toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 function App() {
   const [isClosing, setIsClosing] = useState(false)
@@ -248,6 +278,84 @@ function App() {
     return () => {
       document.removeEventListener('focusin', handleFocusIn)
       document.removeEventListener('focusout', handleFocusOut)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!isSupabaseConfigured) return
+    if (window.navigator.onLine === false) return
+
+    const sessionGuardKey = 'packya_cloud_review_done_v1'
+    if (window.sessionStorage.getItem(sessionGuardKey) === '1') return
+
+    let cancelled = false
+
+    const reviewCloudVsLocal = async () => {
+      try {
+        const report = await buildCloudLocalDiffReport()
+        if (cancelled) return
+
+        if (!report.hasDifferences) {
+          window.sessionStorage.setItem(sessionGuardKey, '1')
+          return
+        }
+
+        const summaryLines = report.differences.slice(0, 8).map((diff) => {
+          const label = ENTITY_LABEL_MAP[String(diff.entity)] ?? String(diff.entity)
+          const reason = String(diff.reason ?? 'Diferencia detectada')
+          const cloudDate = formatSyncDate(diff.cloudUpdatedAt)
+          const localDate = formatSyncDate(diff.localLatestAt)
+          return `- ${label}: ${reason}. Local(${diff.localCount}) vs Nube(${diff.cloudCount}). Local: ${localDate}. Nube: ${cloudDate}`
+        })
+
+        const truncated = report.differences.length > 8
+          ? `\n... y ${report.differences.length - 8} diferencia(s) más.`
+          : ''
+
+        const message =
+          `Se detectaron diferencias entre Local y Nube:\n\n` +
+          `${summaryLines.join('\n')}${truncated}\n\n` +
+          `Aceptar = aplicar NUBE sobre LOCAL ahora.\n` +
+          `Cancelar = mantener LOCAL (luego podés elegir subir LOCAL a Nube).`
+
+        const applyCloudToLocal = window.confirm(message)
+        if (cancelled) return
+
+        if (applyCloudToLocal) {
+          report.differences.forEach((diff) => {
+            applyCloudPayloadToLocal(diff.entity, diff.cloudPayload)
+          })
+
+          window.sessionStorage.setItem(sessionGuardKey, '1')
+          window.alert('Se aplicaron los cambios de Nube sobre Local. La app se recargará para actualizar todo.')
+          window.location.reload()
+          return
+        }
+
+        const keepLocalAndUpload = window.confirm(
+          '¿Querés mantener la base LOCAL y subirla ahora a la NUBE para sincronizar ambas?',
+        )
+        if (cancelled) return
+
+        if (keepLocalAndUpload) {
+          for (const diff of report.differences) {
+            await forceUpsertCloudSnapshot(diff.entity, diff.localPayload ?? [])
+          }
+
+          window.alert('Sincronización completada: se mantuvo Local y se actualizó Nube con esos datos.')
+        }
+
+        window.sessionStorage.setItem(sessionGuardKey, '1')
+      } catch (error) {
+        console.warn('[cloud-review] No se pudo completar la revisión de diferencias:', error)
+      }
+    }
+
+    void reviewCloudVsLocal()
+
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -677,6 +785,7 @@ function App() {
               />
             }
           />
+          <Route path="/base-datos" element={<DatabaseStatusPage />} />
           <Route path="/configuracion" element={<SettingsPage />} />
           <Route
             path="/stock"

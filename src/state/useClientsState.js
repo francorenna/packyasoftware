@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const CLIENTS_STORAGE_KEY = 'packya_clients'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -162,6 +163,12 @@ const loadClientsFromStorage = () => {
 
 function useClientsState() {
   const [clients, setClients] = useState(() => loadClientsFromStorage())
+  const clientsRef = useRef(clients)
+  useCloudSnapshotSync('clients', clients)
+
+  useEffect(() => {
+    clientsRef.current = clients
+  }, [clients])
 
   useEffect(() => {
     try {
@@ -174,66 +181,62 @@ function useClientsState() {
   const upsertClient = (clientData) => {
     const safeClientData = clientData ?? {}
     const incomingId = String(safeClientData.id ?? '').trim()
-    let savedClient = null
+    const prevClients = Array.isArray(clientsRef.current) ? clientsRef.current : []
+    const existing = prevClients.find((client) => String(client.id) === incomingId)
+    const resolvedName = String(safeClientData.name ?? existing?.name ?? '').trim()
+    if (!resolvedName) return null
 
-    setClients((prevClients) => {
-      const existing = prevClients.find((client) => String(client.id) === incomingId)
-      const resolvedName = String(safeClientData.name ?? existing?.name ?? '').trim()
-      if (!resolvedName) return prevClients
+    const resolvedId = incomingId || `CLI-${Date.now()}`
+    const hasPhone = Object.prototype.hasOwnProperty.call(safeClientData, 'phone')
+    const hasEmail = Object.prototype.hasOwnProperty.call(safeClientData, 'email')
+    const hasAddress = Object.prototype.hasOwnProperty.call(safeClientData, 'address')
+    const hasNotes = Object.prototype.hasOwnProperty.call(safeClientData, 'notes')
+    const hasObservations = Object.prototype.hasOwnProperty.call(safeClientData, 'observations')
+    const hasCreditBalance = Object.prototype.hasOwnProperty.call(safeClientData, 'creditBalance')
+    const hasPaymentAllocations = Object.prototype.hasOwnProperty.call(safeClientData, 'paymentAllocations')
 
-      const resolvedId = incomingId || `CLI-${Date.now()}`
-      const hasPhone = Object.prototype.hasOwnProperty.call(safeClientData, 'phone')
-      const hasEmail = Object.prototype.hasOwnProperty.call(safeClientData, 'email')
-      const hasAddress = Object.prototype.hasOwnProperty.call(safeClientData, 'address')
-      const hasNotes = Object.prototype.hasOwnProperty.call(safeClientData, 'notes')
-      const hasObservations = Object.prototype.hasOwnProperty.call(safeClientData, 'observations')
-      const hasCreditBalance = Object.prototype.hasOwnProperty.call(safeClientData, 'creditBalance')
-      const hasPaymentAllocations = Object.prototype.hasOwnProperty.call(safeClientData, 'paymentAllocations')
-
-      if (hasCreditBalance) {
-        const incomingCredit = Number(safeClientData.creditBalance)
-        if (Number.isFinite(incomingCredit) && incomingCredit < 0) {
-          throw new Error('creditBalance no puede ser negativo')
-        }
+    if (hasCreditBalance) {
+      const incomingCredit = Number(safeClientData.creditBalance)
+      if (Number.isFinite(incomingCredit) && incomingCredit < 0) {
+        throw new Error('creditBalance no puede ser negativo')
       }
+    }
 
-      const nextClient = {
-        id: resolvedId,
-        name: resolvedName,
-        phone: hasPhone
-          ? normalizePhone(safeClientData.phone)
-          : String(existing?.phone ?? ''),
-        email: hasEmail
-          ? String(safeClientData.email ?? '').trim()
-          : String(existing?.email ?? ''),
-        address: hasAddress
-          ? String(safeClientData.address ?? '').trim()
-          : String(existing?.address ?? ''),
-        notes: hasNotes
-          ? String(safeClientData.notes ?? '').trim()
-          : String(existing?.notes ?? ''),
-        observations: hasObservations
-          ? normalizeClientObservations(safeClientData.observations)
-          : normalizeClientObservations(existing?.observations),
-        creditBalance: hasCreditBalance
-          ? toPositiveNumber(safeClientData.creditBalance)
-          : toPositiveNumber(existing?.creditBalance),
-        paymentAllocations: hasPaymentAllocations
-          ? normalizeClientPaymentAllocations(safeClientData.paymentAllocations)
-          : normalizeClientPaymentAllocations(existing?.paymentAllocations),
-        createdAt: String(existing?.createdAt ?? new Date().toISOString()),
-      }
+    const nextClient = {
+      id: resolvedId,
+      name: resolvedName,
+      phone: hasPhone
+        ? normalizePhone(safeClientData.phone)
+        : String(existing?.phone ?? ''),
+      email: hasEmail
+        ? String(safeClientData.email ?? '').trim()
+        : String(existing?.email ?? ''),
+      address: hasAddress
+        ? String(safeClientData.address ?? '').trim()
+        : String(existing?.address ?? ''),
+      notes: hasNotes
+        ? String(safeClientData.notes ?? '').trim()
+        : String(existing?.notes ?? ''),
+      observations: hasObservations
+        ? normalizeClientObservations(safeClientData.observations)
+        : normalizeClientObservations(existing?.observations),
+      creditBalance: hasCreditBalance
+        ? toPositiveNumber(safeClientData.creditBalance)
+        : toPositiveNumber(existing?.creditBalance),
+      paymentAllocations: hasPaymentAllocations
+        ? normalizeClientPaymentAllocations(safeClientData.paymentAllocations)
+        : normalizeClientPaymentAllocations(existing?.paymentAllocations),
+      createdAt: String(existing?.createdAt ?? new Date().toISOString()),
+    }
 
-      savedClient = nextClient
+    const nextClients = existing
+      ? prevClients.map((client) => (client.id === nextClient.id ? nextClient : client))
+      : [nextClient, ...prevClients]
 
-      if (!existing) return [nextClient, ...prevClients]
+    clientsRef.current = nextClients
+    setClients(nextClients)
 
-      return prevClients.map((client) =>
-        client.id === nextClient.id ? nextClient : client,
-      )
-    })
-
-    return savedClient
+    return nextClient
   }
 
   const deleteClient = (clientId) => {

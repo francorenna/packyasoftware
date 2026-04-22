@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createDebouncedStorageWriter } from '../utils/storageDebounce'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const PRODUCTS_STORAGE_KEY = 'packya_products'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
@@ -237,6 +238,7 @@ const loadProductsFromStorage = () => {
 
 function useProductsState() {
   const [products, setProducts] = useState(() => loadProductsFromStorage())
+  useCloudSnapshotSync('products', products)
   const productsStorageWriter = useMemo(
     () => createDebouncedStorageWriter({
       key: PRODUCTS_STORAGE_KEY,

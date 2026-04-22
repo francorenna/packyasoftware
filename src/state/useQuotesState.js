@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const QUOTES_STORAGE_KEY = 'packya_quotes'
 
@@ -129,6 +130,7 @@ const loadQuotes = () => {
 
 function useQuotesState() {
   const [quotes, setQuotes] = useState(() => loadQuotes())
+  useCloudSnapshotSync('quotes', quotes)
 
   useEffect(() => {
     try {

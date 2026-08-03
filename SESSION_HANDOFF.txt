@@ -1,0 +1,125 @@
+Packya Gestion - Session Handoff
+Fecha: 2026-08-02
+
+IMPORTANTE
+- Este archivo es resumen ejecutivo de continuidad.
+- La fuente de verdad cronologica completa es SESSION_LOG.md.
+
+ESTADO OPERATIVO ACTUAL
+- app/package: 3.0.0
+- app config: 3.0.0
+- Foco activo: refinamiento final de la Orden de Trabajo PDF, con identidad visual ya aprobada y motor de composicion ya optimizado.
+
+ESTADO FUNCIONAL AL CIERRE
+1) Ruta activa de runtime
+- Entry point vigente: `src/utils/pdf.js`
+- Runtime aprobado: `src/utils/orderDocumentRefinedBrowser.js`
+- Motor activo y principal: `src/utils/orderDocumentRefinedShared.js`
+
+2) Estado visual al cierre
+- Header y Footer: aprobados, no tocar salvo instruccion explicita.
+- Estructura general del documento: aprobada.
+- Direccion visual: corporativa/editorial premium, no administrativa.
+- Tipografia: Montserrat + Inter embebidas y obligatorias.
+- Iconografia: Tabler SVG ya integrada en Cliente, Pedido, Productos, Resumen, Pago y Observaciones.
+
+3) Estado del motor al cierre
+- Watermark tratado como fondo visual y sin participar del layout.
+- Page breaks del cierre separados por bloque:
+  - Resumen economico
+  - Informacion de Pago
+  - Observaciones
+- El motor ya no reserva anticipadamente todo el cierre por cada fila de producto.
+- Footer sigue pegado al borde inferior.
+
+4) Estado del bloque de pago al cierre
+- Titulo actual: `Informacion de Pago`.
+- Aviso institucional agregado arriba del bloque.
+- Dos tarjetas nativas:
+  - CUENTA PRINCIPAL
+  - CUENTA ALTERNATIVA
+- Cada tarjeta muestra:
+  - Alias
+  - Titular
+  - CUIT
+
+5) Estado de Observaciones al cierre
+- Si hay nota real, se imprime el texto.
+- Siempre quedan lineas suaves para escritura manual.
+- Si no hay nota, no se imprime placeholder explicativo.
+
+6) Estado de datos del cliente al cierre
+- Si existen, ya se muestran automaticamente:
+  - Empresa
+  - CUIT
+  - Responsable
+- Si no existen, no dejan huecos ni placeholders.
+
+7) Ultimas salidas QA validadas
+- Carpeta recomendada de referencia final:
+  - `release/qa-order-docs-editorial-final`
+- Carpeta util para variante de lectura con contenido autoexplicativo:
+  - `release/qa-order-docs-readability-v2`
+
+8) Paginado validado mas reciente
+- `release/qa-order-docs-editorial-final/qa-order-docs-report.json`
+  - 1 producto -> 1 pagina
+  - 35 productos -> 4 paginas
+- `release/qa-order-docs-readability-v2/qa-order-docs-report.json`
+  - 1 producto -> 1 pagina
+  - 35 productos -> 4 paginas
+
+PRIORIDAD APROBADA POR NEGOCIO
+1. Cerrar Orden de Trabajo con ultimo pulido visual/editorial.
+2. Recién despues reutilizar el motor para Presupuesto.
+3. Luego Remito.
+
+CHECKLIST DE ARRANQUE PARA MANANA
+1. Abrir y revisar primero estos archivos:
+  - `SESSION_LOG.md`
+  - `SESSION_HANDOFF.txt`
+  - `src/utils/orderDocumentRefinedShared.js`
+2. Tomar como baseline visual principal:
+  - `release/qa-order-docs-editorial-final/ORDER_QA_01.pdf`
+  - `release/qa-order-docs-editorial-final/ORDER_QA_35.pdf`
+3. Si el foco sigue siendo Orden de Trabajo, no tocar:
+  - Header
+  - Footer
+  - estructura general
+  - layout macro
+4. Hacer cambios solo en:
+  - jerarquias tipograficas
+  - espaciados internos
+  - micro-contrastes
+  - contenido autoexplicativo
+  - composicion del cierre
+5. Validar siempre despues de cada ajuste:
+  - 1 producto
+  - 35 productos
+6. Verificar que siga cumpliendo:
+  - 1 -> 1 pagina
+  - 35 -> 4 paginas
+7. No iniciar Presupuesto ni Remito hasta que el usuario confirme cierre visual final de Orden de Trabajo.
+
+RIESGOS Y CONTROLES
+- Riesgo principal actual: que un ajuste de legibilidad o contenido vuelva a empujar `1 producto` a 2 paginas.
+- Control: correr siempre QA corto con escenario de 1 producto despues de tocar el cierre.
+- Riesgo secundario: que el bloque de pago se vea demasiado administrativo o comprimido.
+- Control: refinar solo densidad, jerarquia y claridad, no sumar elementos.
+- Riesgo secundario: romper la sensacion premium al sobreactuar color o iconografia.
+- Control: mantener iconos discretos y color solo como acento.
+
+PROXIMO HITO
+- Dejar la Orden de Trabajo en estado final de envio a cliente, con ultimo pulido editorial fino y cero dudas de legibilidad.
+
+PENDIENTES CONCRETOS PARA MANANA
+1. Revisar visualmente si el bloque `Informacion de Pago` todavia puede ganar claridad sin perder compacidad.
+2. Revisar si `Cliente` y `Pedido` pueden respirar mejor con ajustes minimos de espaciado interno.
+3. Revisar si `TOTAL A PAGAR` necesita aun mas protagonismo visual o ya esta en punto correcto.
+4. Evaluar si la tabla de productos necesita una limpieza final de ritmo vertical entre descripcion y precios.
+5. Confirmar version final entre estas dos carpetas candidatas:
+  - `release/qa-order-docs-editorial-final`
+  - `release/qa-order-docs-readability-v2`
+
+MENSAJE EXACTO PARA DECIR MANANA Y RETOMAR DESDE ESTE MISMO PUNTO
+- "Continuemos desde el cierre de 2026-08-02 en Packya. Tomá como baseline `release/qa-order-docs-editorial-final/ORDER_QA_01.pdf` y `release/qa-order-docs-editorial-final/ORDER_QA_35.pdf`. No toques header, footer, layout ni estructura. Quiero el último pulido editorial de la Orden de Trabajo, priorizando claridad, jerarquía y percepción premium, manteniendo `1 producto -> 1 página` y `35 productos -> 4 páginas`." 

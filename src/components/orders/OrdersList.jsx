@@ -14,6 +14,7 @@ const orderStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancela
 const sampleOrderStatuses = ['Pendiente', 'Lista']
 const deliveryMethods = ['Presencial', 'Envío', 'Otro']
 const COLLAPSED_SECTIONS_STORAGE_KEY = 'packya_orders_collapsed_sections_v1'
+const ORDERS_VIEW_MODE_STORAGE_KEY = 'packya_orders_view_mode_v1'
 
 const toPositiveNumber = (value) => {
   const parsed = Number(value)
@@ -124,6 +125,33 @@ const parseCreatedTimestamp = (value) => {
   return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp
 }
 
+const getTodayDateKey = () => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const getDateKeyWithOffset = (baseDateKey, offsetDays) => {
+  if (typeof baseDateKey !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(baseDateKey)) return ''
+  const [year, month, day] = baseDateKey.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  date.setDate(date.getDate() + Number(offsetDays || 0))
+  const nextYear = date.getFullYear()
+  const nextMonth = String(date.getMonth() + 1).padStart(2, '0')
+  const nextDay = String(date.getDate()).padStart(2, '0')
+  return `${nextYear}-${nextMonth}-${nextDay}`
+}
+
+const getReadyDeliveryBucket = (deliveryDate, todayDateKey, tomorrowDateKey) => {
+  if (typeof deliveryDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return 'unscheduled'
+  if (deliveryDate < todayDateKey) return 'overdue'
+  if (deliveryDate === todayDateKey) return 'today'
+  if (deliveryDate === tomorrowDateKey) return 'tomorrow'
+  return 'upcoming'
+}
+
 const getDaysSinceDelivery = (value) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
 
@@ -160,7 +188,7 @@ const orderSectionMeta = {
   production: {
     title: 'Producción',
     badge: 'Producción',
-    description: 'Pedidos en preparación y trabajo de planta.',
+    description: 'Prioridad diaria: pedidos pendientes y en proceso para organizar la operación.',
     accentClassName: 'orders-section-production',
     emptyText: 'No hay pedidos en producción para este filtro.',
   },
@@ -230,7 +258,7 @@ function OrdersList({
   const [expandedOrderId, setExpandedOrderId] = useState(null)
   const didExpandFromPropRef = useRef('')
   const collectionCardRefs = useRef({})
-  const hasAutoScrolledCriticalRef = useRef(false)
+  const DELIVERED_PAGE_SIZE = 30
   const collectingFeedbackTimeoutRef = useRef(null)
   const [paymentDrafts, setPaymentDrafts] = useState({})
   const [deliveryDrafts, setDeliveryDrafts] = useState({})
@@ -260,6 +288,11 @@ function OrdersList({
     delivered: true,
     cancelled: true,
   })
+  const [sectionVisibleCount, setSectionVisibleCount] = useState({
+    delivered: DELIVERED_PAGE_SIZE,
+  })
+  const [isFocusMode, setIsFocusMode] = useState(false)
+  const [readyViewFilter, setReadyViewFilter] = useState('all')
   const [clientObservationsModal, setClientObservationsModal] = useState({
     isOpen: false,
     client: null,
@@ -530,6 +563,12 @@ function OrdersList({
       return parseDeliveryTimestamp(a?.deliveryDate) - parseDeliveryTimestamp(b?.deliveryDate)
     })
 
+    sectionBuckets.delivered.sort((a, b) => {
+      const byDeliveryDate = parseDeliveryTimestamp(b?.deliveryDate) - parseDeliveryTimestamp(a?.deliveryDate)
+      if (byDeliveryDate !== 0) return byDeliveryDate
+      return parseCreatedTimestamp(b?.createdAt) - parseCreatedTimestamp(a?.createdAt)
+    })
+
     sectionBuckets.cancelled.sort(
       (a, b) => parseCreatedTimestamp(b?.createdAt) - parseCreatedTimestamp(a?.createdAt),
     )
@@ -686,6 +725,29 @@ function OrdersList({
   }, [collapsedSections])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      const rawValue = String(window.localStorage.getItem(ORDERS_VIEW_MODE_STORAGE_KEY) ?? '').trim()
+      if (rawValue === 'focus') {
+        setIsFocusMode(true)
+      }
+    } catch {
+      // Ignore malformed local storage content.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      window.localStorage.setItem(ORDERS_VIEW_MODE_STORAGE_KEY, isFocusMode ? 'focus' : 'full')
+    } catch {
+      // Ignore storage quota issues.
+    }
+  }, [isFocusMode])
+
+  useEffect(() => {
     return () => {
       if (collectingFeedbackTimeoutRef.current) {
         clearTimeout(collectingFeedbackTimeoutRef.current)
@@ -694,17 +756,108 @@ function OrdersList({
   }, [])
 
   useEffect(() => {
-    if (hasAutoScrolledCriticalRef.current) return
+    const deliveredCount = groupedSections.find((section) => section.key === 'delivered')?.orders?.length ?? 0
+    setSectionVisibleCount((prev) => {
+      const nextDeliveredCount = Math.max(
+        DELIVERED_PAGE_SIZE,
+        Math.min(Number(prev.delivered || DELIVERED_PAGE_SIZE), deliveredCount || DELIVERED_PAGE_SIZE),
+      )
 
-    const firstCriticalClient = collectionClients.find((client) => Number(client.maxDays || 0) > 10)
-    if (!firstCriticalClient) return
+      if (nextDeliveredCount === Number(prev.delivered || DELIVERED_PAGE_SIZE)) return prev
+      return {
+        ...prev,
+        delivered: nextDeliveredCount,
+      }
+    })
+  }, [DELIVERED_PAGE_SIZE, groupedSections])
 
-    const cardNode = collectionCardRefs.current[firstCriticalClient.key]
-    if (!cardNode || typeof cardNode.scrollIntoView !== 'function') return
+  const focusMetrics = useMemo(() => {
+    const todayKey = getTodayDateKey()
+    const deliveredToday = safeOrders.filter((order) => {
+      if (order?.isSample) return false
+      if (String(order?.status ?? '') !== 'Entregado') return false
+      return String(order?.deliveryDate ?? '') === todayKey
+    }).length
 
-    hasAutoScrolledCriticalRef.current = true
-    cardNode.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [collectionClients])
+    const sectionMap = groupedSections.reduce((acc, section) => {
+      acc[String(section.key)] = Number(section.count || 0)
+      return acc
+    }, {})
+
+    const productionOrders = groupedSections.find((section) => section.key === 'production')?.orders ?? []
+    const pendingCount = productionOrders.filter((order) => String(order?.status ?? '') === 'Pendiente').length
+    const inProgressCount = productionOrders.filter((order) => String(order?.status ?? '') === 'En Proceso').length
+    const delayedProductionCount = productionOrders.filter((order) => {
+      const status = String(order?.status ?? '')
+      if (status !== 'Pendiente' && status !== 'En Proceso') return false
+      return getDaysSinceTimestamp(order?.createdAt) >= 2
+    }).length
+    const oldestProductionDays = productionOrders.reduce((maxDays, order) => {
+      const status = String(order?.status ?? '')
+      if (status !== 'Pendiente' && status !== 'En Proceso') return maxDays
+      const ageDays = getDaysSinceTimestamp(order?.createdAt)
+      return Math.max(maxDays, ageDays)
+    }, 0)
+
+    return {
+      production: Number(sectionMap.production || 0),
+      productionPending: pendingCount,
+      productionInProgress: inProgressCount,
+      productionDelayed: delayedProductionCount,
+      productionOldestDays: oldestProductionDays,
+      ready: Number(sectionMap.ready || 0),
+      collections: Number(collectionsSummary.clientsCount || 0),
+      deliveredToday,
+    }
+  }, [collectionsSummary.clientsCount, groupedSections, safeOrders])
+
+  const readySectionOrders = useMemo(
+    () => groupedSections.find((section) => section.key === 'ready')?.orders ?? [],
+    [groupedSections],
+  )
+
+  const todayDateKey = getTodayDateKey()
+  const tomorrowDateKey = getDateKeyWithOffset(todayDateKey, 1)
+
+  const readyBucketCounters = useMemo(
+    () => readySectionOrders.reduce((acc, order) => {
+      const bucket = getReadyDeliveryBucket(String(order?.deliveryDate ?? ''), todayDateKey, tomorrowDateKey)
+      acc[bucket] = Number(acc[bucket] || 0) + 1
+      return acc
+    }, {
+      overdue: 0,
+      today: 0,
+      tomorrow: 0,
+      upcoming: 0,
+      unscheduled: 0,
+    }),
+    [readySectionOrders, todayDateKey, tomorrowDateKey],
+  )
+
+  const openFocusSection = (sectionKey) => {
+    const normalized = String(sectionKey ?? '').trim()
+    if (!normalized) return
+
+    if (normalized === 'collections') {
+      const zone = typeof document !== 'undefined'
+        ? document.querySelector('.collections-compact-zone')
+        : null
+      if (zone && typeof zone.scrollIntoView === 'function') {
+        zone.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+      return
+    }
+
+    setCollapsedSections((prev) => ({
+      ...prev,
+      production: normalized !== 'production',
+      ready: normalized !== 'ready',
+      collections: normalized !== 'collections',
+      delivered: normalized !== 'delivered',
+      cancelled: normalized !== 'cancelled',
+      [normalized]: false,
+    }))
+  }
 
   const toggleSection = (sectionKey) => {
     setCollapsedSections((prev) => ({
@@ -1165,7 +1318,7 @@ function OrdersList({
     }
 
   return (
-    <section className="card-block">
+    <section className={`card-block ${isFocusMode ? 'orders-focus-mode' : ''}`}>
       <div className="card-head orders-card-head">
         <div>
           <h3>Flujo operativo de pedidos</h3>
@@ -1195,6 +1348,13 @@ function OrdersList({
           >
             Todos
           </button>
+          <button
+            type="button"
+            className={`filter-btn ${isFocusMode ? 'filter-btn-active' : ''}`}
+            onClick={() => setIsFocusMode((prev) => !prev)}
+          >
+            {isFocusMode ? 'Modo completo' : 'Modo foco'}
+          </button>
         </div>
       </div>
 
@@ -1206,6 +1366,53 @@ function OrdersList({
           onChange={(event) => onSearchChange?.(event.target.value)}
         />
       </div>
+
+      {isFocusMode && (
+        <div className="orders-focus-strip">
+          <article className="orders-focus-pill orders-focus-pill-primary">
+            <small>Pendientes</small>
+            <strong>{focusMetrics.productionPending}</strong>
+            <button type="button" className="quick-fill-btn" onClick={() => openFocusSection('production')}>
+              Ir
+            </button>
+          </article>
+          <article className="orders-focus-pill orders-focus-pill-primary">
+            <small>En proceso</small>
+            <strong>{focusMetrics.productionInProgress}</strong>
+            <button type="button" className="quick-fill-btn" onClick={() => openFocusSection('production')}>
+              Ir
+            </button>
+          </article>
+          <article className="orders-focus-pill orders-focus-pill-alert">
+            <small>Atrasados (+2 días)</small>
+            <strong>{focusMetrics.productionDelayed}</strong>
+            <button type="button" className="quick-fill-btn" onClick={() => openFocusSection('production')}>
+              Priorizar
+            </button>
+          </article>
+          <article className="orders-focus-pill">
+            <small>Listos para salida</small>
+            <strong>{focusMetrics.ready}</strong>
+            <button type="button" className="quick-fill-btn" onClick={() => openFocusSection('ready')}>
+              Ir
+            </button>
+          </article>
+          <article className="orders-focus-pill orders-focus-pill-secondary">
+            <small>Entregados hoy</small>
+            <strong>{focusMetrics.deliveredToday}</strong>
+            <button type="button" className="quick-fill-btn" onClick={() => openFocusSection('collections')}>
+              Cobrar
+            </button>
+          </article>
+          <article className="orders-focus-pill orders-focus-pill-secondary">
+            <small>Pedido más antiguo</small>
+            <strong>{focusMetrics.productionOldestDays} días</strong>
+            <button type="button" className="quick-fill-btn" onClick={() => openFocusSection('production')}>
+              Revisar
+            </button>
+          </article>
+        </div>
+      )}
 
       <div className="table-wrap">
         <table className="orders-table">
@@ -1221,6 +1428,21 @@ function OrdersList({
           <tbody>
             {operationalSections.map((section) => {
               const isCollapsed = Boolean(collapsedSections[section.key])
+              const readyFilteredOrders = section.key === 'ready'
+                ? section.orders.filter((order) => {
+                  if (readyViewFilter === 'all') return true
+                  const bucket = getReadyDeliveryBucket(
+                    String(order?.deliveryDate ?? ''),
+                    todayDateKey,
+                    tomorrowDateKey,
+                  )
+                  return bucket === readyViewFilter
+                })
+                : section.orders
+              const visibleDeliveredCount = Number(sectionVisibleCount.delivered || DELIVERED_PAGE_SIZE)
+              const sectionOrdersToRender = section.key === 'delivered'
+                ? readyFilteredOrders.slice(0, visibleDeliveredCount)
+                : readyFilteredOrders
 
               return (
                 <Fragment key={section.key}>
@@ -1250,7 +1472,60 @@ function OrdersList({
                     </tr>
                   )}
 
-                  {!isCollapsed && section.orders.map((order, index) => {
+                  {!isCollapsed && section.key === 'ready' && (
+                    <tr className="orders-section-empty-row">
+                      <td colSpan={5}>
+                        <div className="orders-ready-filter-strip">
+                          <button
+                            type="button"
+                            className={`orders-ready-filter-btn ${readyViewFilter === 'all' ? 'orders-ready-filter-btn-active' : ''}`}
+                            onClick={() => setReadyViewFilter('all')}
+                          >
+                            Todos ({section.orders.length})
+                          </button>
+                          <button
+                            type="button"
+                            className={`orders-ready-filter-btn ${readyViewFilter === 'overdue' ? 'orders-ready-filter-btn-active-overdue' : ''}`}
+                            onClick={() => setReadyViewFilter('overdue')}
+                          >
+                            Vencidos ({readyBucketCounters.overdue})
+                          </button>
+                          <button
+                            type="button"
+                            className={`orders-ready-filter-btn ${readyViewFilter === 'today' ? 'orders-ready-filter-btn-active' : ''}`}
+                            onClick={() => setReadyViewFilter('today')}
+                          >
+                            Hoy ({readyBucketCounters.today})
+                          </button>
+                          <button
+                            type="button"
+                            className={`orders-ready-filter-btn ${readyViewFilter === 'tomorrow' ? 'orders-ready-filter-btn-active' : ''}`}
+                            onClick={() => setReadyViewFilter('tomorrow')}
+                          >
+                            Mañana ({readyBucketCounters.tomorrow})
+                          </button>
+                          <button
+                            type="button"
+                            className={`orders-ready-filter-btn ${readyViewFilter === 'upcoming' ? 'orders-ready-filter-btn-active' : ''}`}
+                            onClick={() => setReadyViewFilter('upcoming')}
+                          >
+                            Próximos ({readyBucketCounters.upcoming})
+                          </button>
+                          {readyBucketCounters.unscheduled > 0 && (
+                            <button
+                              type="button"
+                              className={`orders-ready-filter-btn ${readyViewFilter === 'unscheduled' ? 'orders-ready-filter-btn-active' : ''}`}
+                              onClick={() => setReadyViewFilter('unscheduled')}
+                            >
+                              Sin fecha ({readyBucketCounters.unscheduled})
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+
+                  {!isCollapsed && sectionOrdersToRender.map((order, index) => {
                     const orderId = String(order.id ?? `pedido-${index}`)
               const displayOrderId = formatOrderId(orderId)
               const orderClient = String(order.clientName ?? order.client ?? 'Sin cliente')
@@ -1270,6 +1545,31 @@ function OrdersList({
               const isDeliveredWithDebt = !order.isSample && orderStatus === 'Entregado' && remainingDebt > 0
               const deliveryAgeDays = getDaysSinceDelivery(order?.deliveryDate)
               const isReadyPendingDelivery = !order.isSample && orderStatus === 'Listo'
+              const isProductionActive = !order.isSample && (orderStatus === 'Pendiente' || orderStatus === 'En Proceso')
+              const productionQueueDays = isProductionActive ? getDaysSinceTimestamp(order?.createdAt) : 0
+              const productionQueueAgingClass = productionQueueDays >= 3
+                ? 'order-production-aging-badge-critical'
+                : productionQueueDays >= 1
+                  ? 'order-production-aging-badge-warning'
+                  : 'order-production-aging-badge-fresh'
+              const productionQueueLabel = isProductionActive
+                ? `${orderStatus === 'Pendiente' ? 'Pendiente' : 'En proceso'} · ${productionQueueDays} ${productionQueueDays === 1 ? 'día' : 'días'}`
+                : ''
+              const readyDeliveryBucket = isReadyPendingDelivery
+                ? getReadyDeliveryBucket(String(order?.deliveryDate ?? ''), todayDateKey, tomorrowDateKey)
+                : ''
+              const readyDeliveryChipLabel =
+                readyDeliveryBucket === 'overdue'
+                  ? 'Salida vencida'
+                  : readyDeliveryBucket === 'today'
+                    ? 'Salida hoy'
+                    : readyDeliveryBucket === 'tomorrow'
+                      ? 'Salida mañana'
+                      : readyDeliveryBucket === 'upcoming'
+                        ? 'Salida próxima'
+                        : readyDeliveryBucket === 'unscheduled'
+                          ? 'Sin fecha de salida'
+                          : ''
               const statusLabel = isDeliveredWithDebt
                 ? `Entregado – Deuda ${formatCurrency(remainingDebt)}`
                 : isReadyPendingDelivery
@@ -1374,6 +1674,8 @@ function OrdersList({
                       ? 'Registrar entrega'
                       : isDeliveredWithDebt
                         ? 'Cobrar saldo'
+                        : orderStatus === 'Entregado'
+                          ? 'Reabrir'
                         : ''
 
               const handleQuickAction = (event) => {
@@ -1408,6 +1710,15 @@ function OrdersList({
 
                 if (isDeliveredWithDebt) {
                   openPaymentQuickModalForOrder(orderId)
+                  return
+                }
+
+                if (orderStatus === 'Entregado') {
+                  void appConfirm(
+                    '¿Querés reabrir este pedido y volverlo a En Proceso? Esto ayuda a corregir errores humanos.',
+                  ).then((shouldReopen) => {
+                    if (shouldReopen) onUpdateOrderStatus?.(orderId, 'En Proceso')
+                  })
                 }
               }
 
@@ -1456,7 +1767,7 @@ function OrdersList({
                 ]
 
                 if (!order.isSample && remainingDebt > 0) {
-                  lines.push('', 'Podés pagar escaneando el QR en el PDF.')
+                  lines.push('', 'Podés pagar por transferencia bancaria. Si querés, te pasamos los datos nuevamente.')
                 }
 
                 lines.push('', 'Quedamos atentos.', 'PACKYA')
@@ -1668,7 +1979,7 @@ function OrdersList({
               return (
                 <Fragment key={orderId}>
                   <tr
-                    className={`order-main-row ${rowAccentClassName} ${order.isSample ? 'order-main-row-sample' : ''} ${isExpanded ? 'order-main-row-expanded' : ''}`}
+                    className={`order-main-row ${rowAccentClassName} ${isProductionActive && productionQueueDays >= 3 ? 'order-production-row-critical' : ''} ${isProductionActive && productionQueueDays >= 1 && productionQueueDays < 3 ? 'order-production-row-warning' : ''} ${isReadyPendingDelivery ? `order-ready-row-${readyDeliveryBucket}` : ''} ${order.isSample ? 'order-main-row-sample' : ''} ${isExpanded ? 'order-main-row-expanded' : ''}`}
                     onClick={() => toggleOrder(orderId)}
                   >
                     <td>
@@ -1726,6 +2037,16 @@ function OrdersList({
                         <span className={`status-badge ${statusBadgeClass}`}>
                           {`${getOrderStatusIcon(orderStatus)} ${statusLabel}`}
                         </span>
+                        {isProductionActive && (
+                          <span className={`order-production-aging-badge ${productionQueueAgingClass}`}>
+                            {productionQueueLabel}
+                          </span>
+                        )}
+                        {isReadyPendingDelivery && readyDeliveryChipLabel && (
+                          <span className={`order-ready-delivery-chip order-ready-delivery-chip-${readyDeliveryBucket}`}>
+                            {readyDeliveryChipLabel}
+                          </span>
+                        )}
                         {hasItems && <span className="order-items-progress-badge">{itemsProgressLabel}</span>}
                         {isDeliveredWithDebt && Number.isInteger(deliveryAgeDays) && (
                           <span className="order-collection-age-badge">
@@ -2291,6 +2612,30 @@ function OrdersList({
                       return null
                     }
                   })()}
+
+                  {!isCollapsed && section.key === 'delivered' && section.orders.length > visibleDeliveredCount && (
+                    <tr className="orders-section-empty-row">
+                      <td colSpan={5}>
+                        <div className="orders-section-load-more-wrap">
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            onClick={() => {
+                              setSectionVisibleCount((prev) => ({
+                                ...prev,
+                                delivered: Number(prev.delivered || DELIVERED_PAGE_SIZE) + DELIVERED_PAGE_SIZE,
+                              }))
+                            }}
+                          >
+                            Mostrar {Math.min(DELIVERED_PAGE_SIZE, section.orders.length - visibleDeliveredCount)} más
+                          </button>
+                          <span className="orders-section-load-more-text">
+                            Viendo {Math.min(visibleDeliveredCount, section.orders.length)} de {section.orders.length} entregados
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 </Fragment>
               )})}
             </Fragment>

@@ -2,6 +2,7 @@ import { getSupabaseClient, isSupabaseConfigured } from '../integrations/supabas
 
 const CLOUD_SYNC_QUEUE_KEY = 'packya_cloud_sync_queue'
 const CLOUD_SYNC_HASH_BY_ENTITY_KEY = 'packya_cloud_sync_hash_by_entity'
+const CLOUD_SYNC_HEALTH_KEY = 'packya_cloud_sync_health'
 const CLOUD_SNAPSHOT_TABLE = 'cloud_snapshots'
 export const CLOUD_SYNC_STATUS_EVENT = 'packya:cloud-sync-status'
 export const ENTITY_STORAGE_KEY_MAP = {
@@ -13,14 +14,26 @@ export const ENTITY_STORAGE_KEY_MAP = {
   manual_purchase_lists: 'packya_manual_purchase_lists',
   expenses: 'packya_expenses',
   quotes: 'packya_quotes',
+  daily_panel_entries: 'packya_daily_panel_entries_v1',
 }
+export const CLOUD_WRITE_ALLOWLIST = ['orders', 'clients', 'quotes', 'purchases', 'manual_purchase_lists', 'products', 'suppliers', 'expenses', 'daily_panel_entries']
 
 const KNOWN_ENTITIES = Object.keys(ENTITY_STORAGE_KEY_MAP)
+const CLOUD_WRITE_ALLOWLIST_SET = new Set(CLOUD_WRITE_ALLOWLIST)
 
 let listenersAttached = false
 let isProcessingQueue = false
 
 const MAX_SYNC_ERROR_LENGTH = 280
+const MAX_CLOUD_PAYLOAD_BYTES = 1024 * 1024
+
+const getTodayKey = () => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
 const isBrowser = () => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
 
@@ -78,9 +91,97 @@ const saveHashByEntity = (hashByEntity) => {
   safeWriteJson(CLOUD_SYNC_HASH_BY_ENTITY_KEY, hashByEntity && typeof hashByEntity === 'object' ? hashByEntity : {})
 }
 
+const loadHealth = () => {
+  const parsed = safeReadJson(CLOUD_SYNC_HEALTH_KEY, null)
+  const todayKey = getTodayKey()
+
+  if (!parsed || typeof parsed !== 'object') {
+    return {
+      dayKey: todayKey,
+      queuePeakToday: 0,
+      lastAttemptAt: '',
+      lastSuccessAt: '',
+    }
+  }
+
+  const safeDayKey = String(parsed.dayKey ?? '')
+  const persistedPeak = Number(parsed.queuePeakToday ?? 0)
+
+  if (safeDayKey !== todayKey) {
+    return {
+      dayKey: todayKey,
+      queuePeakToday: 0,
+      lastAttemptAt: String(parsed.lastAttemptAt ?? ''),
+      lastSuccessAt: String(parsed.lastSuccessAt ?? ''),
+    }
+  }
+
+  return {
+    dayKey: safeDayKey || todayKey,
+    queuePeakToday: Number.isFinite(persistedPeak) && persistedPeak > 0 ? persistedPeak : 0,
+    lastAttemptAt: String(parsed.lastAttemptAt ?? ''),
+    lastSuccessAt: String(parsed.lastSuccessAt ?? ''),
+  }
+}
+
+const saveHealth = (health) => {
+  safeWriteJson(CLOUD_SYNC_HEALTH_KEY, {
+    dayKey: String(health?.dayKey ?? getTodayKey()),
+    queuePeakToday: Number(health?.queuePeakToday ?? 0),
+    lastAttemptAt: String(health?.lastAttemptAt ?? ''),
+    lastSuccessAt: String(health?.lastSuccessAt ?? ''),
+  })
+}
+
+const updateHealth = (updater) => {
+  const current = loadHealth()
+  const next = typeof updater === 'function' ? updater(current) : current
+  const safeNext = next && typeof next === 'object' ? next : current
+  saveHealth(safeNext)
+  return safeNext
+}
+
+const registerQueuePeak = (queueLength) => {
+  const length = Number(queueLength || 0)
+  if (!Number.isFinite(length) || length <= 0) return
+
+  updateHealth((current) => {
+    const todayKey = getTodayKey()
+    const resetPeak = current.dayKey === todayKey ? current.queuePeakToday : 0
+
+    return {
+      ...current,
+      dayKey: todayKey,
+      queuePeakToday: Math.max(resetPeak, length),
+    }
+  })
+}
+
+const registerAttemptAt = () => {
+  updateHealth((current) => ({
+    ...current,
+    dayKey: getTodayKey(),
+    lastAttemptAt: new Date().toISOString(),
+  }))
+}
+
+const registerSuccessAt = () => {
+  updateHealth((current) => ({
+    ...current,
+    dayKey: getTodayKey(),
+    lastSuccessAt: new Date().toISOString(),
+  }))
+}
+
 const isOnline = () => {
   if (!isBrowser()) return false
   return window.navigator.onLine !== false
+}
+
+export const isCloudEntityWriteAllowed = (entity) => {
+  const key = String(entity ?? '').trim()
+  if (!key) return false
+  return CLOUD_WRITE_ALLOWLIST_SET.has(key)
 }
 
 const buildCloudErrorInfo = (error) => {
@@ -134,19 +235,221 @@ const reportCloudError = (message, error) => {
   }
 }
 
+const reportCloudInfo = (message, details = '') => {
+  if (!isBrowser()) return
+  try {
+    window?.packyaLogger?.log?.('info', message, details)
+  } catch {
+    void 0
+  }
+}
+
+const reportCloudWarn = (message, details = '') => {
+  if (!isBrowser()) return
+  try {
+    window?.packyaLogger?.log?.('warn', message, details)
+  } catch {
+    void 0
+  }
+}
+
+const safeSerializePayload = (payload) => {
+  try {
+    return JSON.stringify(payload ?? null)
+  } catch {
+    return ''
+  }
+}
+
+const toPayloadByteSize = (serializedPayload) => {
+  if (typeof serializedPayload !== 'string') return 0
+  try {
+    return new Blob([serializedPayload]).size
+  } catch {
+    return serializedPayload.length
+  }
+}
+
+const validateCloudWritePayload = (entity, payload) => {
+  const entityKey = String(entity ?? '').trim()
+
+  if (!entityKey) {
+    return {
+      isValid: false,
+      reason: 'Entidad vacia',
+      serializedPayload: '',
+      payloadBytes: 0,
+    }
+  }
+
+  if (!isCloudEntityWriteAllowed(entityKey)) {
+    return {
+      isValid: false,
+      reason: `Entidad no permitida en etapa 1: ${entityKey}`,
+      serializedPayload: '',
+      payloadBytes: 0,
+    }
+  }
+
+  const serializedPayload = safeSerializePayload(payload)
+  if (!serializedPayload) {
+    return {
+      isValid: false,
+      reason: `Payload no serializable para ${entityKey}`,
+      serializedPayload: '',
+      payloadBytes: 0,
+    }
+  }
+
+  const payloadBytes = toPayloadByteSize(serializedPayload)
+  if (payloadBytes > MAX_CLOUD_PAYLOAD_BYTES) {
+    return {
+      isValid: false,
+      reason: `Payload excede limite (${payloadBytes} bytes > ${MAX_CLOUD_PAYLOAD_BYTES}) para ${entityKey}`,
+      serializedPayload,
+      payloadBytes,
+    }
+  }
+
+  return {
+    isValid: true,
+    reason: '',
+    serializedPayload,
+    payloadBytes,
+  }
+}
+
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/
+
+const toTrimmedString = (value) => String(value ?? '').trim()
+
+const toSafeNumber = (value) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const toIsoOrEmpty = (value) => {
+  if (value === null || value === undefined || value === '') return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toISOString()
+}
+
+const toIsoOrNull = (value) => {
+  const iso = toIsoOrEmpty(value)
+  return iso || null
+}
+
+const toDateOnlyOrEmpty = (value) => {
+  const raw = toTrimmedString(value)
+  if (!raw) return ''
+  if (DATE_ONLY_REGEX.test(raw)) return raw
+
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return ''
+
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const normalizeOrderItem = (item) => ({
+  productId: toTrimmedString(item?.productId),
+  productName: toTrimmedString(item?.productName ?? item?.product),
+  quantity: toSafeNumber(item?.quantity),
+  unitPrice: toSafeNumber(item?.unitPrice),
+  isClientMaterial: Boolean(item?.isClientMaterial),
+  itemCompleted: Boolean(item?.itemCompleted),
+})
+
+const normalizeOrderPayment = (payment) => ({
+  id: toTrimmedString(payment?.id),
+  amount: toSafeNumber(payment?.amount),
+  method: toTrimmedString(payment?.method),
+  date: toIsoOrEmpty(payment?.date),
+  note: toTrimmedString(payment?.note),
+})
+
+const normalizeOrderAdjustment = (adjustment) => ({
+  id: toTrimmedString(adjustment?.id),
+  amount: toSafeNumber(adjustment?.amount),
+  note: toTrimmedString(adjustment?.note ?? adjustment?.reason),
+  date: toIsoOrEmpty(adjustment?.date),
+})
+
+const normalizeOrderForHash = (order) => {
+  const clientName = toTrimmedString(order?.clientName ?? order?.client)
+
+  const items = (Array.isArray(order?.items) ? order.items : [])
+    .map((item) => normalizeOrderItem(item))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+
+  const payments = (Array.isArray(order?.payments) ? order.payments : [])
+    .map((payment) => normalizeOrderPayment(payment))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+
+  const financialAdjustments = (Array.isArray(order?.financialAdjustments) ? order.financialAdjustments : [])
+    .map((adjustment) => normalizeOrderAdjustment(adjustment))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+
+  return {
+    id: toTrimmedString(order?.id),
+    clientId: toTrimmedString(order?.clientId),
+    clientName,
+    status: toTrimmedString(order?.status),
+    createdAt: toIsoOrEmpty(order?.createdAt),
+    productionDate: toIsoOrEmpty(order?.productionDate),
+    readyAt: toIsoOrEmpty(order?.readyAt),
+    deliveryDate: toDateOnlyOrEmpty(order?.deliveryDate),
+    deliveredVia: toTrimmedString(order?.deliveredVia),
+    deliveryType: toTrimmedString(order?.deliveryType),
+    deliveredBy: toTrimmedString(order?.deliveredBy),
+    trackingNumber: toTrimmedString(order?.trackingNumber),
+    deliveryNote: toTrimmedString(order?.deliveryNote ?? order?.deliveryDetails),
+    deliveryDetails: toTrimmedString(order?.deliveryDetails),
+    productionTime: toTrimmedString(order?.productionTime),
+    sourceQuoteId: toTrimmedString(order?.sourceQuoteId),
+    shippingCost: toSafeNumber(order?.shippingCost),
+    financialNote: toTrimmedString(order?.financialNote),
+    discount: toSafeNumber(order?.discount),
+    urgent: Boolean(order?.urgent),
+    isSample: Boolean(order?.isSample),
+    isArchived: Boolean(order?.isArchived),
+    archivedAt: toIsoOrNull(order?.archivedAt),
+    total: toSafeNumber(order?.total),
+    items,
+    payments,
+    financialAdjustments,
+  }
+}
+
+const canonicalizePayloadForEntity = (entity, payload) => {
+  const entityKey = String(entity ?? '').trim()
+  if (entityKey !== 'orders') return payload
+  if (!Array.isArray(payload)) return payload
+
+  return payload
+    .map((order) => normalizeOrderForHash(order))
+    .sort((a, b) => {
+      const idDiff = String(a.id).localeCompare(String(b.id))
+      if (idDiff !== 0) return idDiff
+      return String(a.createdAt).localeCompare(String(b.createdAt))
+    })
+}
+
 const normalizeForHash = (value) => {
   if (Array.isArray(value)) {
     const normalizedEntries = value.map((entry) => normalizeForHash(entry))
 
-    const canSortById = normalizedEntries.every(
-      (entry) => entry && typeof entry === 'object' && !Array.isArray(entry) && Object.prototype.hasOwnProperty.call(entry, 'id'),
-    )
-
-    if (canSortById) {
-      return [...normalizedEntries].sort((a, b) => String(a.id).localeCompare(String(b.id)))
-    }
-
-    return normalizedEntries
+    // Compare sets by content (not insertion order). This prevents false
+    // diffs when local/cloud keep the same data but arrays come in different
+    // order after JSONB roundtrips or state normalization.
+    return [...normalizedEntries].sort((a, b) => {
+      const aKey = JSON.stringify(a)
+      const bKey = JSON.stringify(b)
+      return aKey.localeCompare(bKey)
+    })
   }
 
   if (value && typeof value === 'object') {
@@ -161,9 +464,10 @@ const normalizeForHash = (value) => {
   return value
 }
 
-const toStableHash = (value) => {
+const toStableHash = (value, entity = '') => {
   try {
-    return JSON.stringify(normalizeForHash(value))
+    const canonical = canonicalizePayloadForEntity(entity, value)
+    return JSON.stringify(normalizeForHash(canonical))
   } catch {
     return ''
   }
@@ -234,8 +538,8 @@ const readLocalEntityPayload = (entity) => {
 const buildTraceRow = (entity, cloudByEntity) => {
   const localPayload = readLocalEntityPayload(entity)
   const cloudPayload = cloudByEntity[entity]?.payload ?? null
-  const localHash = toStableHash(localPayload)
-  const cloudHash = toStableHash(cloudPayload)
+  const localHash = toStableHash(localPayload, entity)
+  const cloudHash = toStableHash(cloudPayload, entity)
   const hasLocal = localPayload !== null
   const hasCloud = cloudPayload !== null
   const isInSync = localHash === cloudHash
@@ -264,10 +568,17 @@ export const enqueueCloudSnapshot = (entity, payload) => {
   const entityKey = String(entity ?? '').trim()
   if (!entityKey || !isBrowser()) return false
 
-  const payloadHash = toStableHash(payload)
+  const payloadValidation = validateCloudWritePayload(entityKey, payload)
+  if (!payloadValidation.isValid) {
+    reportCloudWarn('[cloud-sync] Snapshot descartado', payloadValidation.reason)
+    return false
+  }
+
+  const payloadHash = toStableHash(payload, entityKey)
   const hashByEntity = loadHashByEntity()
 
   if (payloadHash && hashByEntity[entityKey] === payloadHash) {
+    reportCloudInfo('[cloud-sync] Snapshot sin cambios', `entity=${entityKey}`)
     return false
   }
 
@@ -292,6 +603,11 @@ export const enqueueCloudSnapshot = (entity, payload) => {
   }
 
   saveQueue(queue)
+  registerQueuePeak(queue.length)
+  reportCloudInfo(
+    '[cloud-sync] Snapshot encolado',
+    `entity=${entityKey} queue=${queue.length} bytes=${payloadValidation.payloadBytes}`,
+  )
   emitStatusChange()
   return true
 }
@@ -299,6 +615,7 @@ export const enqueueCloudSnapshot = (entity, payload) => {
 export const getCloudSyncStatus = () => {
   const pendingQueue = loadQueue()
   const headJob = pendingQueue[0] ?? null
+  const health = loadHealth()
 
   return {
     configured: isSupabaseConfigured,
@@ -309,6 +626,9 @@ export const getCloudSyncStatus = () => {
     failedAttempts: Number(headJob?.attempts || 0),
     lastError: String(headJob?.lastError ?? ''),
     queuedAt: String(headJob?.queuedAt ?? ''),
+    queuePeakToday: Number(health.queuePeakToday || 0),
+    lastAttemptAt: String(health.lastAttemptAt ?? ''),
+    lastSuccessAt: String(health.lastSuccessAt ?? ''),
   }
 }
 
@@ -383,6 +703,11 @@ export const probeCloudConnection = async () => {
 }
 
 const pushSnapshotJob = async (job) => {
+  const payloadValidation = validateCloudWritePayload(job?.entity, job?.payload)
+  if (!payloadValidation.isValid) {
+    throw new Error(payloadValidation.reason)
+  }
+
   const supabase = getSupabaseClient()
   if (!supabase) {
     throw new Error('Supabase no configurado')
@@ -406,7 +731,30 @@ const pushSnapshotJob = async (job) => {
 export const forceUpsertCloudSnapshot = async (entity, payload) => {
   const entityKey = String(entity ?? '').trim()
   if (!entityKey) return false
+  const payloadValidation = validateCloudWritePayload(entityKey, payload)
+  if (!payloadValidation.isValid) {
+    throw new Error(payloadValidation.reason)
+  }
   await pushSnapshotJob({ entity: entityKey, payload })
+
+  // Save the hash so enqueueCloudSnapshot won't re-queue this entity immediately
+  const payloadHash = toStableHash(payload, entityKey)
+  const hashByEntity = loadHashByEntity()
+  hashByEntity[entityKey] = payloadHash
+  saveHashByEntity(hashByEntity)
+
+  // Remove any pending queue entry for this entity — it's now in sync
+  const queue = loadQueue()
+  const filteredQueue = queue.filter((job) => String(job?.entity ?? '') !== entityKey)
+  if (filteredQueue.length !== queue.length) {
+    saveQueue(filteredQueue)
+  }
+
+  registerSuccessAt()
+  reportCloudInfo(
+    '[cloud-sync] Upsert forzado exitoso',
+    `entity=${entityKey} bytes=${payloadValidation.payloadBytes}`,
+  )
   emitStatusChange()
   return true
 }
@@ -486,22 +834,61 @@ export const applyCloudPayloadToLocal = (entity, payload) => {
 export const processCloudSyncQueue = async () => {
   if (!isBrowser() || !isSupabaseConfigured || !isOnline()) {
     emitStatusChange()
-    return
+    return {
+      processedCount: 0,
+      hasError: false,
+    }
   }
-  if (isProcessingQueue) return
+  if (isProcessingQueue) {
+    return {
+      processedCount: 0,
+      hasError: false,
+      skippedBecauseProcessing: true,
+    }
+  }
 
   isProcessingQueue = true
   emitStatusChange()
 
+  let processedCount = 0
+  let hasError = false
+
   try {
     let queue = loadQueue()
+    if (queue.length > 0) {
+      const filteredQueue = queue.filter((job) => isCloudEntityWriteAllowed(job?.entity))
+      if (filteredQueue.length !== queue.length) {
+        reportCloudWarn(
+          '[cloud-sync] Jobs removidos por allowlist',
+          `removed=${queue.length - filteredQueue.length}`,
+        )
+        queue = filteredQueue
+        saveQueue(queue)
+      }
+    }
+    registerQueuePeak(queue.length)
+
     while (queue.length > 0) {
       const current = queue[0]
 
+      if (!isCloudEntityWriteAllowed(current?.entity)) {
+        reportCloudWarn('[cloud-sync] Job descartado por allowlist', `entity=${String(current?.entity ?? '')}`)
+        queue.shift()
+        saveQueue(queue)
+        continue
+      }
+
       try {
+        registerAttemptAt()
         await pushSnapshotJob(current)
         queue.shift()
         saveQueue(queue)
+        processedCount += 1
+        registerSuccessAt()
+        reportCloudInfo(
+          '[cloud-sync] Job sincronizado',
+          `entity=${String(current?.entity ?? '')} attempts=${Number(current?.attempts || 0)}`,
+        )
       } catch (error) {
         const message = toCloudErrorText(error)
         queue[0] = {
@@ -511,6 +898,11 @@ export const processCloudSyncQueue = async () => {
         }
         saveQueue(queue)
         reportCloudError(`[cloud-sync] Error subiendo entidad ${String(current?.entity ?? 'unknown')}`, error)
+        reportCloudWarn(
+          '[cloud-sync] Job reintentable',
+          `entity=${String(current?.entity ?? '')} attempts=${Number(queue[0]?.attempts || 0)}`,
+        )
+        hasError = true
         emitStatusChange()
         break
       }
@@ -518,6 +910,11 @@ export const processCloudSyncQueue = async () => {
   } finally {
     isProcessingQueue = false
     emitStatusChange()
+  }
+
+  return {
+    processedCount,
+    hasError,
   }
 }
 

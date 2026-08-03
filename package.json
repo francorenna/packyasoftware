@@ -1,29 +1,32 @@
 {
   "name": "packya-gestion-interna",
   "private": true,
-  "version": "2.1.4",
+  "version": "3.0.0",
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:web": "vite build --mode web",
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:electron": "concurrently \"vite\" \"electron .\"",
     "build:app": "vite build && electron-builder --win nsis",
-    "build:app:test": "cross-env VITE_APP_ENV=testing vite build --mode testing && electron-builder --win nsis --config.appId=\"com.packya.gestion.test\" --config.productName=\"Packya Gestion TEST\" --config.directories.output=release_test",
-    "build:app:prod": "cross-env VITE_APP_ENV=production vite build --mode production && electron-builder --win nsis --config.appId=\"com.packya.gestion.prod\" --config.productName=\"Packya Gestion PROD\" --config.directories.output=release_prod"
+    "build:app:test": "cross-env VITE_APP_ENV=testing vite build --mode testing && electron-builder --win nsis --config.appId=\"com.packya.gestion.test\" --config.productName=\"Packya Gestion TEST\" --config.nsis.shortcutName=\"Packya Gestion TEST\" --config.directories.output=release_test",
+    "build:app:prod": "cross-env VITE_APP_ENV=production vite build --mode production && electron-builder --win nsis --config.appId=\"com.packya.gestion.prod\" --config.productName=\"Packya Gestion PROD\" --config.nsis.shortcutName=\"Packya Gestion PROD\" --config.directories.output=release_prod",
+    "qa:order-docs": "node scripts/generate-order-qa-pdfs.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",
     "jspdf": "^4.1.0",
-    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "@tabler/icons": "^3.46.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
@@ -35,12 +38,13 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "pdf-parse": "^2.4.5",
     "vite": "^7.3.1"
   },
   "build": {
     "appId": "com.packya.gestion",
     "productName": "Packya Gestión",
-    "buildVersion": "2.1.4.0",
+    "buildVersion": "3.0.0.0",
     "directories": {
       "output": "release"
     },

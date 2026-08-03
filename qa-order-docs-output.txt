@@ -1,0 +1,41 @@
+﻿
+> packya-gestion-interna@3.0.0 qa:order-docs
+> node scripts/generate-order-qa-pdfs.mjs
+
+generated C:\Packya Software\release\qa-order-docs\ORDER_QA_01.pdf
+generated C:\Packya Software\release\qa-order-docs\ORDER_QA_05.pdf
+generated C:\Packya Software\release\qa-order-docs\ORDER_QA_10.pdf
+generated C:\Packya Software\release\qa-order-docs\ORDER_QA_20.pdf
+generated C:\Packya Software\release\qa-order-docs\ORDER_QA_35.pdf
+[
+  {
+    "itemCount": 1,
+    "filePath": "C:\\Packya Software\\release\\qa-order-docs\\ORDER_QA_01.pdf",
+    "pageCount": 2,
+    "issues": []
+  },
+  {
+    "itemCount": 5,
+    "filePath": "C:\\Packya Software\\release\\qa-order-docs\\ORDER_QA_05.pdf",
+    "pageCount": 3,
+    "issues": []
+  },
+  {
+    "itemCount": 10,
+    "filePath": "C:\\Packya Software\\release\\qa-order-docs\\ORDER_QA_10.pdf",
+    "pageCount": 3,
+    "issues": []
+  },
+  {
+    "itemCount": 20,
+    "filePath": "C:\\Packya Software\\release\\qa-order-docs\\ORDER_QA_20.pdf",
+    "pageCount": 4,
+    "issues": []
+  },
+  {
+    "itemCount": 35,
+    "filePath": "C:\\Packya Software\\release\\qa-order-docs\\ORDER_QA_35.pdf",
+    "pageCount": 6,
+    "issues": []
+  }
+]

@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const windowIconPath = app.isPackaged
+  ? path.join(__dirname, '..', 'dist', 'logo.ico')
+  : path.join(__dirname, '..', 'public', 'logo.ico')
 let mainWindowRef = null
 let isHandlingCloseFlow = false
 let allowWindowClose = false
@@ -15,6 +18,20 @@ const AUTO_BACKUP_ENABLED = true
 const LOG_RETENTION_DAYS = 7
 let logsDirPath = ''
 let currentLogFilePath = ''
+
+const focusWindowSafely = (window) => {
+  const targetWindow = window && !window.isDestroyed() ? window : null
+  if (!targetWindow) return
+
+  try {
+    if (targetWindow.isMinimized()) targetWindow.restore()
+    if (!targetWindow.isVisible()) targetWindow.show()
+    targetWindow.focus()
+    targetWindow.webContents.focus()
+  } catch {
+    void 0
+  }
+}
 
 const BACKUP_KEYS = [
   'packya_orders',
@@ -26,6 +43,7 @@ const BACKUP_KEYS = [
   'packya_expenses',
   'packya_manual_purchase_lists',
   'packya_quotes',
+  'packya_daily_panel_entries_v1',
   'packya_storage_version',
 ]
 
@@ -235,7 +253,9 @@ function createWindow() {
     height: 820,
     minWidth: 1024,
     minHeight: 680,
+    show: false,
     autoHideMenuBar: true,
+    icon: windowIconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -254,14 +274,34 @@ function createWindow() {
 
   mainWindowRef = mainWindow
 
+  mainWindow.once('ready-to-show', () => {
+    focusWindowSafely(mainWindow)
+
+    setTimeout(() => {
+      focusWindowSafely(mainWindow)
+    }, 120)
+  })
+
+  mainWindow.on('show', () => {
+    focusWindowSafely(mainWindow)
+  })
+
+  mainWindow.on('restore', () => {
+    setTimeout(() => {
+      focusWindowSafely(mainWindow)
+    }, 90)
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    setTimeout(() => {
+      focusWindowSafely(mainWindow)
+    }, 150)
+  })
+
   mainWindow.on('focus', () => {
     if (mainWindow.isDestroyed() || mainWindow.isMinimized()) return
 
-    try {
-      mainWindow.webContents.focus()
-    } catch {
-      void 0
-    }
+    focusWindowSafely(mainWindow)
   })
 
   mainWindow.webContents.on('before-input-event', (_event, input) => {
@@ -274,11 +314,7 @@ function createWindow() {
     if (!mainWindow.isFocused()) return
     if (mainWindow.webContents.isFocused()) return
 
-    try {
-      mainWindow.webContents.focus()
-    } catch {
-      void 0
-    }
+    focusWindowSafely(mainWindow)
   })
 
   mainWindow.on('close', (event) => {
@@ -319,9 +355,7 @@ app.whenReady().then(() => {
         targetWindow.restore()
       }
 
-      targetWindow.show()
-      targetWindow.focus()
-      targetWindow.webContents.focus()
+      focusWindowSafely(targetWindow)
       return true
     } catch {
       return false

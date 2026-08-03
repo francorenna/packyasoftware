@@ -1,0 +1,75 @@
+{
+  "contractVersion": "packya-document-kit.v2",
+  "sourceOfTruth": "PACKYA_SYSTEM_DOCUMENTATION.md",
+  "rules": {
+    "doNotInventFields": true,
+    "omitWhenUnmapped": true,
+    "computedValuesMustBeResolvedByRenderer": true
+  },
+  "document-info-card": {
+    "source": "order",
+    "fields": {
+      "orderNumber": ["order.id"],
+      "issueDate": ["order.createdAt"],
+      "deliveryDate": ["order.deliveryDate"],
+      "productionDate": ["order.productionDate"],
+      "status": ["order.status"]
+    }
+  },
+  "client-card": {
+    "source": "client",
+    "fallbackSource": "order",
+    "fields": {
+      "company": null,
+      "name": ["client.name", "order.clientName", "order.client"],
+      "phone": ["client.phone"],
+      "email": ["client.email"],
+      "address": ["client.address"],
+      "taxId": null
+    }
+  },
+  "product-row": {
+    "source": "order.items[]",
+    "fields": {
+      "productName": ["item.productName"],
+      "description": null,
+      "size": null,
+      "quantity": ["item.quantity"],
+      "unitPrice": ["item.unitPrice"],
+      "total": null,
+      "badge": null,
+      "isClientMaterial": ["item.isClientMaterial"],
+      "itemCompleted": ["item.itemCompleted"]
+    },
+    "computed": {
+      "total": "item.quantity * item.unitPrice"
+    }
+  },
+  "totals-card": {
+    "source": "order",
+    "fields": {
+      "subtotal": null,
+      "discount": ["order.discount"],
+      "shipping": ["order.shippingCost"],
+      "total": ["order.total"]
+    },
+    "computed": {
+      "subtotal": "sum(order.items[].quantity * order.items[].unitPrice)"
+    }
+  },
+  "payment-card": {
+    "source": "order.payments[]",
+    "fields": {
+      "payments": ["order.payments"],
+      "paymentAmount": ["order.payments[].amount"],
+      "paymentMethod": ["order.payments[].method"],
+      "paymentDate": ["order.payments[].date"],
+      "paymentNote": ["order.payments[].note"]
+    },
+    "constants": {
+      "accounts": "TRANSFER_ACCOUNTS",
+      "contactPhone": "PACKYA_PHONE_NUMBER",
+      "website": "PACKYA_WEBSITE_URL"
+    }
+  }
+}

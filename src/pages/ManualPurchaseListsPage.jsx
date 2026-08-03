@@ -87,6 +87,7 @@ function ManualPurchaseListsPage({
   const [formError, setFormError] = useState('')
   const [isQuickSupplierOpen, setIsQuickSupplierOpen] = useState(false)
   const [supplierForm, setSupplierForm] = useState(createSupplierForm())
+  const [listActionMessage, setListActionMessage] = useState('')
 
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products])
   const safeSuppliers = useMemo(() => (Array.isArray(suppliers) ? suppliers : []), [suppliers])
@@ -147,6 +148,7 @@ function ManualPurchaseListsPage({
 
   const openCreateModal = () => {
     resetForm()
+    setListActionMessage('')
     setIsFormModalOpen(true)
   }
 
@@ -293,11 +295,20 @@ function ManualPurchaseListsPage({
 
     if (!payload) return
 
-    if (editingListId) {
-      onUpdateList?.(editingListId, payload)
-    } else {
-      onCreateList?.(payload)
+    const savedList = editingListId
+      ? onUpdateList?.(editingListId, payload)
+      : onCreateList?.(payload)
+
+    if (!savedList) {
+      setFormError('No se pudo guardar la lista. Intentá nuevamente.')
+      return
     }
+
+    setListActionMessage(
+      editingListId
+        ? '✅ Lista actualizada correctamente.'
+        : '✅ Lista creada correctamente.',
+    )
 
     resetForm()
     setIsFormModalOpen(false)
@@ -331,10 +342,22 @@ function ManualPurchaseListsPage({
   const handleConvertList = (listId) => {
     const result = onConvertToPurchase?.(listId)
     if (!result?.success) {
-      setFormError(String(result?.error ?? 'No se pudo convertir la lista.'))
+      const message = String(result?.error ?? 'No se pudo convertir la lista.')
+      setListActionMessage(`⚠ ${message}`)
+
+      if (/proveedor|producto/i.test(message)) {
+        const targetList = safeLists.find((list) => String(list?.id) === String(listId))
+        if (targetList) {
+          handleEditList(targetList)
+          setFormError(message)
+        }
+      }
+
       return
     }
+
     setFormError('')
+    setListActionMessage('✅ Lista convertida en compra correctamente.')
   }
 
   const handleSaveQuickSupplier = () => {
@@ -375,6 +398,12 @@ function ManualPurchaseListsPage({
           <div className="card-head">
             <h3>Listas registradas</h3>
           </div>
+
+          {listActionMessage && (
+            <p className="muted-label" style={{ marginTop: 8, marginBottom: 10 }}>
+              {listActionMessage}
+            </p>
+          )}
 
           <div className="table-wrap">
             <table className="dashboard-table">

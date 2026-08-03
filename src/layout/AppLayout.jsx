@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import ClosingOverlay from '../components/ClosingOverlay'
 import SaveToast from '../components/SaveToast'
+import { brandLogoUrl } from '../utils/brandLogo'
 
 const formatSavedTime = (value) => {
   const date = value instanceof Date ? value : new Date(value)
@@ -23,7 +25,19 @@ function AppLayout({
   onCloseSaveToast,
   globalAlerts,
   onOpenAlert,
+  session,
+  onSignOut,
 }) {
+  const [showWelcomeSplash, setShowWelcomeSplash] = useState(true)
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setShowWelcomeSplash(false)
+    }, 5000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [])
+
   const statusLabel =
     saveStatus === 'saving'
       ? 'Guardando...'
@@ -34,7 +48,19 @@ function AppLayout({
 
   return (
     <div className="app-shell">
-      <Sidebar />
+      {showWelcomeSplash && (
+        <div className="app-welcome-splash" role="status" aria-live="polite">
+          <div className="app-welcome-card">
+            <div className="app-welcome-isotype-shell" aria-hidden="true">
+              <img src={brandLogoUrl} alt="" className="app-welcome-isotype" />
+            </div>
+            <p className="app-welcome-eyebrow">PACKYA GESTION</p>
+            <h1>Bienvenido</h1>
+            <p>Sistema operativo integral para producción, caja y seguimiento comercial.</p>
+          </div>
+        </div>
+      )}
+      <Sidebar session={session} onSignOut={onSignOut} />
       <main className="app-content">
         <aside
           className={`save-indicator ${isSaveIndicatorCompact ? 'save-indicator-compact' : ''}`}

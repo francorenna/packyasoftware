@@ -27,13 +27,16 @@ const getDeltaClassName = (next, current) => {
   return 'muted-label'
 }
 
-function SettingsPage() {
+function SettingsPage({ onRestoreOrdersSafetySnapshot, getOrdersSafetySnapshotMeta }) {
   const fileInputRef = useRef(null)
   const [selectedFile, setSelectedFile] = useState(null)
   const [backupPreview, setBackupPreview] = useState(null)
   const currentCounts = getCurrentBackupCounts()
 
   const { dialogNode, appAlert, appConfirm } = useAppDialog()
+  const ordersSafetySnapshot = typeof getOrdersSafetySnapshotMeta === 'function'
+    ? getOrdersSafetySnapshotMeta()
+    : null
 
   const handleExport = async () => {
     const fileName = exportBackup()
@@ -149,6 +152,48 @@ function SettingsPage() {
         <div className="card-head">
           <h3>Respaldo de datos</h3>
         </div>
+
+        <section className="dashboard-recent" style={{ marginBottom: 12 }}>
+          <div className="card-head">
+            <h3>Modo cierre seguro de Pedidos</h3>
+          </div>
+          <p className="muted-label">
+            Se guarda automáticamente el estado anterior de Pedidos antes de cada cambio.
+          </p>
+          <p className="muted-label">
+            Último snapshot: {ordersSafetySnapshot?.savedAt ? formatDate(ordersSafetySnapshot.savedAt) : 'Sin snapshot'}
+            {' '}| Pedidos: {Number(ordersSafetySnapshot?.count || 0)}
+          </p>
+          <div className="product-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={async () => {
+                if (typeof onRestoreOrdersSafetySnapshot !== 'function') {
+                  await appAlert('No se puede restaurar en este entorno.')
+                  return
+                }
+
+                const confirmed = await appConfirm(
+                  'Vas a restaurar Pedidos al último snapshot de seguridad. ¿Deseás continuar?',
+                  'Restaurar',
+                  'Cancelar',
+                )
+                if (!confirmed) return
+
+                const result = onRestoreOrdersSafetySnapshot()
+                await appAlert(String(result?.message ?? 'Operación completada.'))
+
+                if (result?.ok) {
+                  window.location.reload()
+                }
+              }}
+              disabled={!ordersSafetySnapshot}
+            >
+              Restaurar último snapshot de Pedidos
+            </button>
+          </div>
+        </section>
 
         <div className="product-actions">
           <button type="button" className="secondary-btn" onClick={handleExport}>

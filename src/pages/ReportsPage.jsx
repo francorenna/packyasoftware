@@ -31,6 +31,51 @@ const formatCurrency = (value) =>
     maximumFractionDigits: 0,
   }).format(Number(value) || 0)
 
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/
+
+const toDateFromValue = (value) => {
+  if (typeof value === 'string' && DATE_ONLY_REGEX.test(value)) {
+    const [year, month, day] = value.split('-').map(Number)
+    // Noon avoids edge cases around timezone offsets and DST boundaries.
+    return new Date(year, month - 1, day, 12, 0, 0, 0)
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed
+}
+
+const toTimestamp = (value) => {
+  const parsed = toDateFromValue(value)
+  return parsed ? parsed.getTime() : 0
+}
+
+const getDayStartTimestamp = (value) => {
+  const parsed = toDateFromValue(value)
+  if (!parsed) return 0
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime()
+}
+
+const getOrderIdTimestamp = (orderId) => {
+  const normalized = String(orderId ?? '').trim()
+  const match = /^PED-(\d{13})(?:-\d+)?$/i.exec(normalized)
+  if (!match) return 0
+
+  const ts = Number(match[1])
+  return Number.isFinite(ts) ? ts : 0
+}
+
+const getOrderActivityTimestamp = (order) => {
+  const candidates = [
+    toTimestamp(order?.createdAt),
+    toTimestamp(order?.deliveryDate),
+    getOrderIdTimestamp(order?.id),
+  ].filter((ts) => Number.isFinite(ts) && ts > 0)
+
+  if (candidates.length === 0) return 0
+  return Math.max(...candidates)
+}
+
 const getCategoryLabel = (value) => {
   const normalized = String(value ?? '').trim().toUpperCase()
   const option = CATEGORY_OPTIONS.find((item) => item.key === normalized)
@@ -50,7 +95,7 @@ const getClientDisplayName = (order) => String(order?.clientName ?? order?.clien
 
 const getMonthKeyFromOrder = (order) => {
   const deliveryDate = String(order?.deliveryDate ?? '').trim()
-  if (/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return deliveryDate.slice(0, 7)
+  if (DATE_ONLY_REGEX.test(deliveryDate)) return deliveryDate.slice(0, 7)
 
   const createdAt = new Date(order?.createdAt)
   if (Number.isNaN(createdAt.getTime())) return 'Sin mes'
@@ -69,14 +114,14 @@ const getMonthLabel = (monthKey) => {
 }
 
 const formatDate = (value) => {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return 'Sin fecha'
+  const parsed = toDateFromValue(value)
+  if (!parsed) return 'Sin fecha'
   return parsed.toLocaleDateString('es-AR')
 }
 
 const formatDateDDMMYYYY = (value) => {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return 'Sin fecha'
+  const parsed = toDateFromValue(value)
+  if (!parsed) return 'Sin fecha'
 
   const day = String(parsed.getDate()).padStart(2, '0')
   const month = String(parsed.getMonth() + 1).padStart(2, '0')
@@ -85,8 +130,8 @@ const formatDateDDMMYYYY = (value) => {
 }
 
 const formatTime = (value) => {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return 'Sin hora'
+  const parsed = toDateFromValue(value)
+  if (!parsed) return 'Sin hora'
 
   return parsed.toLocaleTimeString('es-AR', {
     hour: '2-digit',
@@ -96,10 +141,39 @@ const formatTime = (value) => {
 }
 
 const getDaysBetween = (value, now) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 0
-  const diffMs = now.getTime() - date.getTime()
+  const valueDayTs = getDayStartTimestamp(value)
+  const nowDayTs = getDayStartTimestamp(now)
+  if (!valueDayTs || !nowDayTs) return 0
+  const diffMs = nowDayTs - valueDayTs
   return Math.max(Math.floor(diffMs / (1000 * 60 * 60 * 24)), 0)
+}
+
+const getActivityVariant = (daysSince) => {
+  if (daysSince <= 1) return 'green'
+  if (daysSince < 7) return 'yellow'
+  return 'red'
+}
+
+const normalizePhoneToWhatsApp = (value) => {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  if (!digits) return ''
+  if (digits.startsWith('54')) return digits
+  if (digits.startsWith('0')) return `54${digits.slice(1)}`
+  return `54${digits}`
+}
+
+const buildClientRecoveryMessage = ({ variant, clientName, daysSince }) => {
+  const safeName = String(clientName ?? '').trim() || 'cliente'
+
+  if (variant === 'green') {
+    return `Hola ${safeName}, ¿cómo estás? Quedamos a disposición para tu próxima reposición de cajas. Si querés, te paso opciones y tiempos de entrega.`
+  }
+
+  if (variant === 'yellow') {
+    return `Hola ${safeName}, ¿cómo va? Hace unos ${daysSince} días que no registramos pedidos tuyos. Si necesitás cajas, te cotizo hoy mismo y coordinamos entrega.`
+  }
+
+  return `Hola ${safeName}, ¿cómo estás? Hace bastante que no sabemos de vos y queremos ayudarte a que no te falte stock. Si necesitás cajas, escribinos y te armamos propuesta rápida.`
 }
 
 function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
@@ -131,6 +205,7 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
   const [accountScope, setAccountScope] = useState('all')
   const [selectedAccountClientKey, setSelectedAccountClientKey] = useState('')
   const [rankingPeriod, setRankingPeriod] = useState('all')
+  const [activityFilter, setActivityFilter] = useState('all')
 
   const productsSorted = useMemo(
     () =>
@@ -528,6 +603,119 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
     [clientRankingRows],
   )
 
+  const clientActivityRows = useMemo(() => {
+    const now = new Date()
+    const clientsById = safeClients.reduce((acc, client) => {
+      if (!client?.id) return acc
+      acc[String(client.id)] = client
+      return acc
+    }, {})
+
+    const activityByClient = {}
+
+    safeOrders.forEach((order) => {
+      if (order?.isSample) return
+      if (String(order?.status ?? '') === 'Cancelado') return
+
+      const clientKey = getClientKey(order)
+      if (!clientKey) return
+
+      const clientId = String(order?.clientId ?? '').trim()
+      const knownClient = clientId ? clientsById[clientId] : null
+      const clientName = String(knownClient?.name ?? getClientDisplayName(order)).trim() || 'Sin cliente'
+      const clientPhone = String(knownClient?.phone ?? '').trim()
+
+      const dateTs = getOrderActivityTimestamp(order)
+      if (!dateTs) return
+
+      const existing = activityByClient[clientKey]
+      if (!existing) {
+        activityByClient[clientKey] = {
+          clientKey,
+          clientName,
+          clientPhone,
+          lastOrderTs: dateTs,
+          totalOrders: 1,
+        }
+      } else {
+        if (dateTs > existing.lastOrderTs) {
+          existing.lastOrderTs = dateTs
+          existing.clientName = clientName
+          existing.clientPhone = clientPhone || existing.clientPhone
+        }
+        existing.totalOrders += 1
+      }
+    })
+
+    return Object.values(activityByClient)
+      .map((row) => ({
+        ...row,
+        daysSince: getDaysBetween(row.lastOrderTs, now),
+      }))
+      .sort((a, b) => b.daysSince - a.daysSince)
+  }, [safeClients, safeOrders])
+
+  const clientActivityRowsWithVariant = useMemo(
+    () => clientActivityRows.map((row) => ({
+      ...row,
+      variant: getActivityVariant(row.daysSince),
+    })),
+    [clientActivityRows],
+  )
+
+  const clientActivitySummary = useMemo(() => {
+    return clientActivityRowsWithVariant.reduce(
+      (acc, row) => {
+        acc.total += 1
+        acc[row.variant] += 1
+        return acc
+      },
+      {
+        total: 0,
+        green: 0,
+        yellow: 0,
+        red: 0,
+      },
+    )
+  }, [clientActivityRowsWithVariant])
+
+  const filteredClientActivityRows = useMemo(() => {
+    if (activityFilter === 'all') return clientActivityRowsWithVariant
+    return clientActivityRowsWithVariant.filter((row) => row.variant === activityFilter)
+  }, [activityFilter, clientActivityRowsWithVariant])
+
+  const handleCopyActivityMessage = async (row) => {
+    const text = buildClientRecoveryMessage({
+      variant: row.variant,
+      clientName: row.clientName,
+      daysSince: row.daysSince,
+    })
+
+    try {
+      await navigator.clipboard.writeText(text)
+      await appAlert('Mensaje copiado al portapapeles.')
+    } catch {
+      await appAlert('No se pudo copiar el mensaje.')
+    }
+  }
+
+  const handleOpenClientWhatsApp = (row) => {
+    const phone = normalizePhoneToWhatsApp(row.clientPhone)
+    if (!phone) {
+      void appAlert('Este cliente no tiene teléfono cargado para WhatsApp.')
+      return
+    }
+
+    const text = buildClientRecoveryMessage({
+      variant: row.variant,
+      clientName: row.clientName,
+      daysSince: row.daysSince,
+    })
+
+    const targetUrl = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+    window.open(targetUrl, '_blank', 'noopener,noreferrer')
+  }
+
   const costRows = useMemo(
     () =>
       productsSorted.map((product) => {
@@ -599,9 +787,11 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
               .map((option) => option.label)
               .join(', ') || 'Sin categoría'
 
-    generatePriceListPDF({
+    void generatePriceListPDF({
       rows: readyRows,
       categoriesLabel,
+    }).catch(() => {
+      void appAlert('No se pudo generar la lista de precios en PDF.')
     })
   }
 
@@ -639,7 +829,9 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
               .map((option) => option.label)
               .join(', ') || 'Sin categoría'
 
-    generatePriceListPDF({ rows: finalRows, categoriesLabel })
+    void generatePriceListPDF({ rows: finalRows, categoriesLabel }).catch(() => {
+      void appAlert('No se pudo generar la lista de precios en PDF.')
+    })
     closeMissingPriceModal()
   }
 
@@ -1004,6 +1196,91 @@ function ReportsPage({ products, orders, clients, expenses, onSaveProduct }) {
                 </table>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section className="card-block" style={{ gridColumn: '1 / -1' }}>
+          <div className="card-head">
+            <h3>Actividad de clientes</h3>
+          </div>
+          <p className="muted-label">Vista compacta por inactividad: verde (0–1), amarillo (2–6), rojo (7+ días).</p>
+
+          <div className="activity-toolbar">
+            <button
+              type="button"
+              className={`activity-filter-btn ${activityFilter === 'all' ? 'activity-filter-btn-active' : ''}`}
+              onClick={() => setActivityFilter('all')}
+            >
+              Todos ({clientActivitySummary.total})
+            </button>
+            <button
+              type="button"
+              className={`activity-filter-btn activity-filter-btn-green ${activityFilter === 'green' ? 'activity-filter-btn-active' : ''}`}
+              onClick={() => setActivityFilter('green')}
+            >
+              Verde ({clientActivitySummary.green})
+            </button>
+            <button
+              type="button"
+              className={`activity-filter-btn activity-filter-btn-yellow ${activityFilter === 'yellow' ? 'activity-filter-btn-active' : ''}`}
+              onClick={() => setActivityFilter('yellow')}
+            >
+              Amarillo ({clientActivitySummary.yellow})
+            </button>
+            <button
+              type="button"
+              className={`activity-filter-btn activity-filter-btn-red ${activityFilter === 'red' ? 'activity-filter-btn-active' : ''}`}
+              onClick={() => setActivityFilter('red')}
+            >
+              Rojo ({clientActivitySummary.red})
+            </button>
+          </div>
+
+          <div className="client-activity-list">
+            {filteredClientActivityRows.map((row) => {
+              const badgeLabel =
+                row.daysSince === 0
+                  ? 'Hoy'
+                  : row.daysSince === 1
+                    ? 'Ayer'
+                    : row.daysSince < 7
+                      ? `Hace ${row.daysSince}d`
+                      : `${row.daysSince}d sin pedir`
+              const lastDate = formatDate(row.lastOrderTs)
+
+              return (
+                <details key={row.clientKey} className={`client-activity-row client-activity-row-${row.variant}`}>
+                  <summary>
+                    <span className="client-activity-row-name">{row.clientName}</span>
+                    <span className={`activity-badge activity-badge-${row.variant}`}>{badgeLabel}</span>
+                  </summary>
+                  <div className="client-activity-row-details">
+                    <span>Último pedido: {lastDate}</span>
+                    <span>{row.totalOrders} pedido{row.totalOrders !== 1 ? 's' : ''}</span>
+                    <span>Teléfono: {row.clientPhone || 'Sin cargar'}</span>
+                    <div className="client-activity-row-actions">
+                      <button
+                        type="button"
+                        className="activity-inline-btn"
+                        onClick={() => { void handleCopyActivityMessage(row) }}
+                      >
+                        Copiar mensaje
+                      </button>
+                      <button
+                        type="button"
+                        className="activity-inline-btn"
+                        onClick={() => { handleOpenClientWhatsApp(row) }}
+                      >
+                        WhatsApp
+                      </button>
+                    </div>
+                  </div>
+                </details>
+              )
+            })}
+            {filteredClientActivityRows.length === 0 && (
+              <p className="empty-detail">Sin clientes para este filtro.</p>
+            )}
           </div>
         </section>
 

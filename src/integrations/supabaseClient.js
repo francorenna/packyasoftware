@@ -13,8 +13,8 @@ export const getSupabaseClient = () => {
 
   supabaseSingleton = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     auth: {
-      persistSession: false,
-      autoRefreshToken: false,
+      persistSession: true,
+      autoRefreshToken: true,
     },
   })
 

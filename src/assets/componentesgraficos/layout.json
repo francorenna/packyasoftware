@@ -1,0 +1,87 @@
+{
+  "document": {
+    "page": "A4",
+    "orientation": "portrait",
+
+    "margins": {
+      "top": 14,
+      "bottom": 14,
+      "left": 16,
+      "right": 16
+    },
+
+    "gapBetweenComponents": 8,
+
+    "repeatHeader": true,
+    "repeatFooter": true,
+    "repeatProductsHeader": true,
+
+    "minSpaceForFooter": 35,
+
+    "autoPageBreak": true
+  },
+
+  "components": [
+
+    {
+      "id": "header",
+      "file": "Header.svg",
+      "position": "top",
+      "repeat": true,
+      "height": 42
+    },
+
+    {
+      "id": "document-info",
+      "file": "components/document-info-card.svg",
+      "repeat": false,
+      "height": 30
+    },
+
+    {
+      "id": "client",
+      "file": "components/client-card.svg",
+      "repeat": false,
+      "height": 42
+    },
+
+    {
+      "id": "products-header",
+      "file": "components/products-table.svg",
+      "repeatEveryPage": true,
+      "height": 14
+    },
+
+    {
+      "id": "product-row",
+      "file": "components/product-row.svg",
+      "repeatForEachProduct": true,
+      "height": 16,
+      "allowSplit": false
+    },
+
+    {
+      "id": "totals",
+      "file": "components/totals-card.svg",
+      "repeat": false,
+      "keepTogether": true,
+      "height": 52
+    },
+
+    {
+      "id": "payment",
+      "file": "components/payment-card.svg",
+      "repeat": false,
+      "keepTogether": true,
+      "height": 62
+    },
+
+    {
+      "id": "footer",
+      "file": "Footer.svg",
+      "position": "bottom",
+      "repeat": true,
+      "height": 18
+    }
+  ]
+}

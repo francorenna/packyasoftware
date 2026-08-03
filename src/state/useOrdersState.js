@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createDebouncedStorageWriter } from '../utils/storageDebounce'
 import { getOrderFinancialSummary } from '../utils/finance'
 import useCloudSnapshotSync from '../hooks/useCloudSnapshotSync'
 
 const ORDERS_STORAGE_KEY = 'packya_orders'
+const ORDERS_SAFETY_SNAPSHOT_KEY = 'packya_orders_safety_snapshot_v1'
 const STORAGE_VERSION_KEY = 'packya_storage_version'
 const regularStatuses = ['Pendiente', 'En Proceso', 'Listo', 'Entregado', 'Cancelado']
 const sampleStatuses = ['Pendiente', 'Lista']
@@ -191,6 +192,11 @@ const normalizeOrder = (order, index) => {
             method,
             date: toIsoString(payment.date) || normalizedCreatedAt,
             note: String(payment.note ?? '').trim(),
+            orderId: String(payment.orderId ?? order.id ?? '').trim(),
+            clientId: String(payment.clientId ?? order.clientId ?? '').trim(),
+            sourceType: String(payment.sourceType ?? '').trim(),
+            sourceMovementId: String(payment.sourceMovementId ?? '').trim(),
+            linkedDailyPanelDateKey: String(payment.linkedDailyPanelDateKey ?? '').trim(),
           }
         })
         .filter(Boolean)
@@ -227,6 +233,12 @@ const normalizeOrder = (order, index) => {
     toDateOnlyIso(typeof order.productionDate === 'string' ? order.productionDate : '') ||
     normalizedCreatedAt
 
+  const normalizedReadyAt =
+    toIsoString(order.readyAt) ||
+    (!order?.isSample && (safeStatus === 'Listo' || safeStatus === 'Entregado')
+      ? normalizedProductionDate
+      : '')
+
   const normalizedArchivedAt = (() => {
     if (order.archivedAt === null) return null
     const parsed = toIsoString(order.archivedAt)
@@ -241,6 +253,7 @@ const normalizeOrder = (order, index) => {
     status: safeStatus,
     createdAt: normalizedCreatedAt,
     productionDate: normalizedProductionDate,
+    readyAt: normalizedReadyAt,
     deliveryDate:
       typeof order.deliveryDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(order.deliveryDate)
         ? order.deliveryDate
@@ -324,8 +337,10 @@ const loadOrdersFromStorage = () => {
   }
 }
 
-function useOrdersState() {
+function useOrdersState({ onPaymentRegistered } = {}) {
   const [orders, setOrders] = useState(() => loadOrdersFromStorage())
+  const previousOrdersRef = useRef(orders)
+  const hasTrackedChangesRef = useRef(false)
   useCloudSnapshotSync('orders', orders)
   const ordersStorageWriter = useMemo(
     () => createDebouncedStorageWriter({
@@ -339,6 +354,32 @@ function useOrdersState() {
   useEffect(() => {
     ordersStorageWriter.schedule(orders)
   }, [orders, ordersStorageWriter])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    if (!hasTrackedChangesRef.current) {
+      hasTrackedChangesRef.current = true
+      previousOrdersRef.current = orders
+      return
+    }
+
+    const previousOrders = previousOrdersRef.current
+    if (previousOrders === orders) return
+
+    try {
+      const payload = {
+        savedAt: new Date().toISOString(),
+        reason: 'auto-before-change',
+        orders: previousOrders,
+      }
+      window.localStorage.setItem(ORDERS_SAFETY_SNAPSHOT_KEY, JSON.stringify(payload))
+    } catch {
+      void 0
+    }
+
+    previousOrdersRef.current = orders
+  }, [orders])
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -399,6 +440,7 @@ function useOrdersState() {
         client: String(newOrder.clientName ?? newOrder.client ?? 'Sin cliente'),
         createdAt: String(newOrder.createdAt ?? new Date().toISOString()),
         productionDate: toIsoString(newOrder.productionDate) || toIsoString(newOrder.createdAt) || new Date().toISOString(),
+        readyAt: toIsoString(newOrder.readyAt),
         deliveredVia: String(newOrder.deliveredVia ?? '').trim(),
         deliveryType: String(newOrder.deliveryType ?? '').trim(),
         deliveredBy: String(newOrder.deliveredBy ?? '').trim(),
@@ -449,6 +491,7 @@ function useOrdersState() {
         id: newId,
         status: 'Pendiente',
         createdAt: new Date().toISOString(),
+        readyAt: '',
         isArchived: false,
         archivedAt: null,
         payments: [],
@@ -478,6 +521,7 @@ function useOrdersState() {
         id: newId,
         status: nextStatus,
         createdAt: new Date().toISOString(),
+        readyAt: '',
         isArchived: false,
         archivedAt: null,
         payments: [],
@@ -499,27 +543,34 @@ function useOrdersState() {
       ? paymentData.method
       : allowedPaymentMethods[0]
 
+    const targetOrder = orders.find((o) => o.id === orderId)
+    if (!targetOrder || targetOrder.isSample) return
+
+    const remainingDebt = getRemainingDebt(targetOrder)
+    if (paymentAmount > remainingDebt) return
+
+    const newPayment = {
+      id: String(paymentData.id ?? `PAY-${Date.now()}`),
+      amount: paymentAmount,
+      method: paymentMethod,
+      date: toIsoString(paymentData.date) || new Date().toISOString(),
+      note: String(paymentData.note ?? '').trim(),
+      orderId,
+      clientId: String(targetOrder?.clientId ?? ''),
+      sourceType: String(paymentData.sourceType ?? 'orders-ui').trim() || 'orders-ui',
+      sourceMovementId: String(paymentData.sourceMovementId ?? '').trim(),
+      linkedDailyPanelDateKey: String(paymentData.linkedDailyPanelDateKey ?? '').trim(),
+    }
+
     setOrders((prevOrders) => {
-      const targetOrder = prevOrders.find((o) => o.id === orderId)
-
-      const newPayment = {
-        id: `PAY-${Date.now()}`,
-        amount: paymentAmount,
-        method: paymentMethod,
-        date: new Date().toISOString(),
-        note: String(paymentData.note ?? '').trim(),
-        orderId,
-        clientId: String(targetOrder?.clientId ?? ''),
-      }
-
       return prevOrders.map((order) => {
         if (order.id !== orderId) return order
 
         // Do not register payments for sample orders
         if (order.isSample) return order
 
-        const remainingDebt = getRemainingDebt(order)
-        if (paymentAmount > remainingDebt) return order
+        const remainingDebtOnCommit = getRemainingDebt(order)
+        if (paymentAmount > remainingDebtOnCommit) return order
 
         const nextOrder = {
           ...order,
@@ -529,6 +580,14 @@ function useOrdersState() {
         return applyAutoArchive(nextOrder)
       })
     })
+
+    if (typeof onPaymentRegistered === 'function') {
+      onPaymentRegistered({
+        order: targetOrder,
+        payment: newPayment,
+        source: 'order-payment',
+      })
+    }
   }
 
   const registerClientPayment = (paymentData) => {
@@ -610,8 +669,9 @@ function useOrdersState() {
         if (allocatedAmount <= 0) return order
 
         const allocationIndex = allocatedOrderIds.findIndex((id) => id === orderId)
+        const paymentId = `PAY-${allocationBatchId}-${orderId}`
         const newPayment = {
-          id: `PAY-${Date.now()}-${allocationIndex + 1}`,
+          id: paymentId,
           amount: allocatedAmount,
           method: paymentMethod,
           date: createdAt,
@@ -623,6 +683,9 @@ function useOrdersState() {
           isAutoAllocated: true,
           clientPaymentAmount: paymentAmount,
           overpayCredit,
+          sourceType: 'client-allocation',
+          sourceMovementId: String(safePaymentData.sourceMovementId ?? '').trim(),
+          linkedDailyPanelDateKey: String(safePaymentData.linkedDailyPanelDateKey ?? '').trim(),
         }
 
         const nextOrder = {
@@ -634,6 +697,36 @@ function useOrdersState() {
       })
     })
 
+    if (typeof onPaymentRegistered === 'function') {
+      allocationResult.allocations.forEach((allocation, allocationIndex) => {
+        const order = eligibleOrders.find((item) => String(item.id) === String(allocation.orderId)) ?? null
+        const payment = {
+          id: `PAY-${allocationResult.allocationBatchId}-${allocation.orderId}`,
+          amount: Number(allocation.amount || 0),
+          method: paymentMethod,
+          date: allocationResult.createdAt,
+          note: String(safePaymentData.note ?? '').trim(),
+          orderId: String(allocation.orderId ?? ''),
+          clientId: String(order?.clientId ?? targetClientId),
+          allocationBatchId,
+          allocationOrder: allocationIndex + 1,
+          isAutoAllocated: true,
+          clientPaymentAmount: paymentAmount,
+          overpayCredit,
+          sourceType: 'client-allocation',
+          sourceMovementId: String(safePaymentData.sourceMovementId ?? '').trim(),
+          linkedDailyPanelDateKey: String(safePaymentData.linkedDailyPanelDateKey ?? '').trim(),
+        }
+
+        onPaymentRegistered({
+          order,
+          payment,
+          source: 'client-payment',
+          allocationBatchId,
+        })
+      })
+    }
+
     return allocationResult
   }
 
@@ -644,10 +737,12 @@ function useOrdersState() {
 
         const statusList = order.isSample ? sampleStatuses : regularStatuses
         const safeStatus = statusList.includes(nextStatus) ? nextStatus : statusList[0]
+        const shouldStampReadyAt = !order.isSample && safeStatus === 'Listo' && String(order.status ?? '') !== 'Listo'
 
         return applyAutoArchive({
           ...order,
           status: safeStatus,
+          readyAt: shouldStampReadyAt ? new Date().toISOString() : String(order.readyAt ?? ''),
         })
       }),
     )
@@ -943,6 +1038,56 @@ function useOrdersState() {
     )
   }
 
+  const getLastOrdersSafetySnapshotMeta = () => {
+    if (typeof window === 'undefined') return null
+
+    try {
+      const raw = window.localStorage.getItem(ORDERS_SAFETY_SNAPSHOT_KEY)
+      if (!raw) return null
+
+      const parsed = JSON.parse(raw)
+      const savedAt = String(parsed?.savedAt ?? '')
+      const reason = String(parsed?.reason ?? '')
+      const count = Array.isArray(parsed?.orders) ? parsed.orders.length : 0
+
+      return {
+        savedAt,
+        reason,
+        count,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  const restoreLastOrdersSafetySnapshot = () => {
+    if (typeof window === 'undefined') return { ok: false, message: 'Entorno no disponible.' }
+
+    try {
+      const raw = window.localStorage.getItem(ORDERS_SAFETY_SNAPSHOT_KEY)
+      if (!raw) return { ok: false, message: 'No hay snapshot de seguridad disponible.' }
+
+      const parsed = JSON.parse(raw)
+      const snapshotOrders = Array.isArray(parsed?.orders) ? parsed.orders : null
+      if (!snapshotOrders) return { ok: false, message: 'Snapshot inválido.' }
+
+      const normalizedOrders = snapshotOrders
+        .map((order, index) => normalizeOrder(order, index))
+        .filter(Boolean)
+        .map((order) => applyAutoArchive(order))
+
+      setOrders(normalizedOrders)
+
+      return {
+        ok: true,
+        message: `Pedidos restaurados (${normalizedOrders.length}).`,
+        savedAt: String(parsed?.savedAt ?? ''),
+      }
+    } catch {
+      return { ok: false, message: 'No se pudo restaurar snapshot de seguridad.' }
+    }
+  }
+
   return {
     orders,
     createOrder,
@@ -962,6 +1107,8 @@ function useOrdersState() {
     deleteCancelledOrder,
     reopenArchivedOrderAsNew,
     deleteArchivedOrder,
+    getLastOrdersSafetySnapshotMeta,
+    restoreLastOrdersSafetySnapshot,
   }
 }
 

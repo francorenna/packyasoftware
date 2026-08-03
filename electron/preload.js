@@ -39,6 +39,13 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   let lastFocusPingAt = 0
   let lastWritableElement = null
 
+  const requestWindowFocus = () => {
+    const now = Date.now()
+    if (now - lastFocusPingAt < 120) return
+    lastFocusPingAt = now
+    void ipcRenderer.invoke('packya:focus-window').catch(() => false)
+  }
+
   const isWritableTarget = (element) => {
     if (!(element instanceof HTMLElement)) return false
 
@@ -77,12 +84,22 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   document.addEventListener('pointerdown', (event) => {
     rememberWritableTarget(event.target)
+    requestWindowFocus()
 
-    const now = Date.now()
-    if (now - lastFocusPingAt < 120) return
-    lastFocusPingAt = now
+    const target = event.target instanceof HTMLElement
+      ? event.target.closest('input, textarea, [contenteditable="true"]')
+      : null
 
-    void ipcRenderer.invoke('packya:focus-window').catch(() => false)
+    if (target instanceof HTMLElement && isWritableTarget(target)) {
+      setTimeout(() => {
+        if (!document.contains(target)) return
+        try {
+          target.focus({ preventScroll: true })
+        } catch {
+          void 0
+        }
+      }, 0)
+    }
   }, true)
 
   document.addEventListener('focusin', (event) => {
@@ -97,7 +114,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (!document.contains(lastWritableElement)) return
     if (document.activeElement !== document.body) return
 
-    void ipcRenderer.invoke('packya:focus-window').catch(() => false)
+    requestWindowFocus()
     lastWritableElement.focus({ preventScroll: true })
   }, true)
+
+  window.addEventListener('DOMContentLoaded', () => {
+    requestWindowFocus()
+    setTimeout(() => {
+      requestWindowFocus()
+    }, 140)
+  })
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return
+    requestWindowFocus()
+  })
 }

@@ -123,6 +123,23 @@ function OrdersPage({
   const displayNextOrderId = useMemo(() => formatOrderId(nextOrderId), [nextOrderId])
   const { dialogNode, appAlert } = useAppDialog()
 
+  const resetNeedsModalState = useCallback(() => {
+    setIsNeedsModalOpen(false)
+    setNeedsListDraftMode(false)
+    setNeedsListSavedMsg('')
+  }, [])
+
+  const requestCloseNeedsModal = useCallback(() => {
+    if (needsListDraftMode && needsDraftItems.length > 0) {
+      const shouldDiscard = window.confirm(
+        'Tenés una lista de compra en edición. Si cerrás ahora, se perderán esos cambios. ¿Querés cerrar igual?',
+      )
+      if (!shouldDiscard) return
+    }
+
+    resetNeedsModalState()
+  }, [needsDraftItems.length, needsListDraftMode, resetNeedsModalState])
+
   const location = useLocation()
   const openOrderId = useMemo(() => {
     const params = new URLSearchParams(location.search)
@@ -461,7 +478,7 @@ function OrdersPage({
         <div className="page-header-row">
           <div>
             <h2 className="section-title">Pedidos</h2>
-            <p>Gestioná pedidos con múltiples productos y seguimiento por estado.</p>
+            <p>Gestioná pedidos con una imagen más fuerte, lectura rápida y salida lista para cliente.</p>
             {saveSuccessMessage && (
               <p className="delivery-save-success">{saveSuccessMessage}</p>
             )}
@@ -480,6 +497,21 @@ function OrdersPage({
           </div>
         </div>
       </header>
+
+      <section className="orders-hero" aria-label="Resumen de marca y pedidos">
+        <div className="orders-hero-copy">
+          <p className="orders-hero-kicker">Nueva imagen de Packya</p>
+          <h3>Órdenes de trabajo más modernas, claras y listas para entregar.</h3>
+          <p>
+            El formato se simplificó para que producción, administración y el cliente lean el mismo documento sin ruido visual.
+          </p>
+        </div>
+        <div className="orders-hero-badges" aria-hidden="true">
+          <span>PDF renovado</span>
+          <span>Logo centralizable</span>
+          <span>Más impacto comercial</span>
+        </div>
+      </section>
 
       <div className="orders-list-full">
         <section className="production-summary" aria-label="Resumen de Producción">
@@ -647,16 +679,12 @@ function OrdersPage({
           aria-label="Producción necesaria"
           onClick={(event) => {
             if (event.target === event.currentTarget) {
-              setIsNeedsModalOpen(false)
-              setNeedsListDraftMode(false)
-              setNeedsListSavedMsg('')
+              requestCloseNeedsModal()
             }
           }}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
-              setIsNeedsModalOpen(false)
-              setNeedsListDraftMode(false)
-              setNeedsListSavedMsg('')
+              requestCloseNeedsModal()
             }
           }}
         >
@@ -714,7 +742,7 @@ function OrdersPage({
                   <button
                     type="button"
                     className="secondary-btn"
-                    onClick={() => { setIsNeedsModalOpen(false); setNeedsListSavedMsg('') }}
+                    onClick={requestCloseNeedsModal}
                   >
                     Cerrar
                   </button>
@@ -777,15 +805,24 @@ function OrdersPage({
                     <button
                       type="button"
                       className="primary-btn"
-                      onClick={() => {
-                        const result = onCreateManualPurchaseList({
-                          supplierId: '',
-                          supplierName: 'Por definir',
-                          items: needsDraftItems,
-                        })
-                        if (result) {
+                      onClick={async () => {
+                        try {
+                          const result = onCreateManualPurchaseList({
+                            supplierId: '',
+                            supplierName: 'Por definir',
+                            items: needsDraftItems,
+                          })
+
+                          if (!result) {
+                            await appAlert('No se pudo guardar la lista de compra. Revisá los datos e intentá nuevamente.')
+                            return
+                          }
+
                           setNeedsListSavedMsg('✅ Lista guardada en Listas de compra')
                           setNeedsListDraftMode(false)
+                        } catch (error) {
+                          const message = error instanceof Error ? error.message : String(error)
+                          await appAlert(`No se pudo guardar la lista de compra: ${message}`)
                         }
                       }}
                     >

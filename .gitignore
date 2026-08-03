@@ -2,8 +2,13 @@ node_modules/
 dist/
 release/
 release_test/
+release_prod/
+release_prod2/
+release_prod_precheck/
 buildapp.log
 *.log
+*.blockmap
+latest.yml
 .env
 .env.local
 .env.*.local

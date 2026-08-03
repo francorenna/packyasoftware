@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './layout/AppLayout'
 import ArchivedOrdersPage from './pages/ArchivedOrdersPage'
 import ClientsPage from './pages/ClientsPage'
 import DashboardPage from './pages/DashboardPage'
 import DatabaseStatusPage from './pages/DatabaseStatusPage'
+import DailyPanelPage from './pages/DailyPanelPage'
 import FinancePage from './pages/FinancePage'
 import ManualPurchaseListsPage from './pages/ManualPurchaseListsPage'
 import OrdersPage from './pages/OrdersPage'
@@ -14,6 +15,7 @@ import ReportsPage from './pages/ReportsPage'
 import QuotesPage from './pages/QuotesPage'
 import SettingsPage from './pages/SettingsPage'
 import StockPage from './pages/StockPage'
+import useAuthState from './hooks/useAuthState'
 import useClientsState from './state/useClientsState'
 import useExpensesState from './state/useExpensesState'
 import useManualPurchaseListsState from './state/useManualPurchaseListsState'
@@ -22,12 +24,16 @@ import useProductsState from './state/useProductsState'
 import usePurchasesState from './state/usePurchasesState'
 import useQuotesState from './state/useQuotesState'
 import useSuppliersState from './state/useSuppliersState'
+import useDailyPanelState from './state/useDailyPanelState'
 import { getOrderFinancialSummary } from './utils/finance'
+import { formatOrderId } from './utils/orders'
 import { calculateStockSnapshot } from './utils/stock'
 import {
   applyCloudPayloadToLocal,
   buildCloudLocalDiffReport,
+  CLOUD_WRITE_ALLOWLIST,
   forceUpsertCloudSnapshot,
+  isCloudEntityWriteAllowed,
 } from './utils/cloudSync'
 import { isSupabaseConfigured } from './integrations/supabaseClient'
 
@@ -56,7 +62,47 @@ const formatSyncDate = (value) => {
   })
 }
 
+const toDateKey = (value) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const createEmptyDailyPanelEntry = (dateKey) => ({
+  dateKey,
+  openingBalances: {
+    cash: 0,
+    mercadoPagoFranco: 0,
+    mercadoPagoDamian: 0,
+  },
+  closingBalances: {
+    cash: 0,
+    mercadoPagoFranco: 0,
+    mercadoPagoDamian: 0,
+  },
+  incomeMovements: [],
+  expenseMovements: [],
+  operational: {
+    ordersTaken: 0,
+    ordersDelivered: 0,
+    paymentsRegistered: 0,
+    productionActivity: 0,
+    printedBoxes: 0,
+  },
+  notes: '',
+  openingNote: '',
+  closingNote: '',
+  isClosed: false,
+  openedAt: new Date().toISOString(),
+  closedAt: '',
+})
+
 function App() {
+  const { session, signOut } = useAuthState()
   const [isClosing, setIsClosing] = useState(false)
   const [closeMessage, setCloseMessage] = useState('🔄 Guardando datos...')
   const [saveStatus, setSaveStatus] = useState('saved')
@@ -65,9 +111,58 @@ function App() {
   const [saveToastToken, setSaveToastToken] = useState(0)
 
   const { suppliers, upsertSupplier, deleteSupplier } = useSuppliersState()
+  const { dailyPanelEntries, getDailyPanelEntry, upsertDailyPanelEntry } = useDailyPanelState()
   const { clients, upsertClient, deleteClient } = useClientsState()
   const { expenses, addExpense, deleteExpense, getMonthlyExpenses } = useExpensesState()
   const { quotes, createQuote, updateQuoteStatus, updateQuote } = useQuotesState()
+  const syncOrderPaymentToDailyPanel = useCallback(({ order, payment }) => {
+    const orderId = String(order?.id ?? payment?.orderId ?? '').trim()
+    const paymentId = String(payment?.id ?? '').trim()
+    const paymentDateKey = toDateKey(payment?.date)
+    const amount = Math.max(Number(payment?.amount || 0), 0)
+
+    if (!orderId || !paymentId || !paymentDateKey || amount <= 0) return
+    if (String(payment?.sourceType ?? '').trim() === 'daily-panel') return
+
+    upsertDailyPanelEntry(paymentDateKey, (current) => {
+      const baseEntry = current ?? createEmptyDailyPanelEntry(paymentDateKey)
+      const incomeMovements = Array.isArray(baseEntry.incomeMovements) ? baseEntry.incomeMovements : []
+      const alreadyLinked = incomeMovements.some((movement) =>
+        String(movement?.linkedOrderPaymentId ?? movement?.id ?? '') === paymentId,
+      )
+
+      if (alreadyLinked) return baseEntry
+
+      const nextOperational = {
+        ...(baseEntry.operational ?? {}),
+        paymentsRegistered: Math.max(Number(baseEntry.operational?.paymentsRegistered || 0) + 1, 0),
+      }
+
+      return {
+        ...baseEntry,
+        incomeMovements: [
+          ...incomeMovements,
+          {
+            id: paymentId,
+            concept: `Cobro pedido ${formatOrderId(orderId)}`,
+            amount,
+            category: 'Cobro pedido',
+            origin: 'Sistema/Pedidos',
+            fundId: 'cash',
+            actor: 'FRANCO',
+            linkedOrderId: orderId,
+            linkedOrderPaymentId: paymentId,
+            unlinkReason: '',
+            supplierName: '',
+            note: String(payment?.note ?? '').trim(),
+            isAdvancePayment: Boolean(payment?.isAutoAllocated),
+            isCompact: true,
+          },
+        ],
+        operational: nextOperational,
+      }
+    })
+  }, [upsertDailyPanelEntry])
   const {
     orders,
     createOrder,
@@ -87,7 +182,9 @@ function App() {
     deleteCancelledOrder,
     reopenArchivedOrderAsNew,
     deleteArchivedOrder,
-  } = useOrdersState()
+    getLastOrdersSafetySnapshotMeta,
+    restoreLastOrdersSafetySnapshot,
+  } = useOrdersState({ onPaymentRegistered: syncOrderPaymentToDailyPanel })
   const {
     products,
     upsertProduct,
@@ -111,6 +208,63 @@ function App() {
     duplicateList,
     convertToPurchase,
   } = useManualPurchaseListsState(handleCreatePurchase)
+
+  const applyDailyPanelIncomeToOrderPayment = useCallback(({ dateKey, movement }) => {
+    const safeDateKey = String(dateKey ?? '').trim()
+    const movementId = String(movement?.id ?? '').trim()
+    const orderId = String(movement?.linkedOrderId ?? '').trim()
+    const amount = Math.max(Number(movement?.amount || 0), 0)
+
+    if (!safeDateKey || !movementId || !orderId || amount <= 0) {
+      return {
+        ok: false,
+        message: 'Movimiento inválido para vincular a pedido.',
+      }
+    }
+
+    const targetOrder = (Array.isArray(orders) ? orders : []).find(
+      (order) => String(order?.id ?? '').trim() === orderId,
+    )
+    if (!targetOrder) {
+      return {
+        ok: false,
+        message: `No se encontró el pedido ${formatOrderId(orderId)}.`,
+      }
+    }
+
+    const remainingDebt = Number(getOrderFinancialSummary(targetOrder)?.remainingDebt || 0)
+    const payableAmount = Math.min(amount, Math.max(remainingDebt, 0))
+    if (payableAmount <= 0) {
+      return {
+        ok: false,
+        message: `El pedido ${formatOrderId(orderId)} ya no tiene deuda pendiente.`,
+      }
+    }
+
+    const paymentDate = toDateKey(safeDateKey)
+    const paymentId = `PAY-DP-${safeDateKey}-${movementId}`
+
+    registerPayment(orderId, {
+      id: paymentId,
+      amount: payableAmount,
+      method: 'Efectivo',
+      date: paymentDate ? `${paymentDate}T12:00:00` : new Date().toISOString(),
+      note: String(movement?.note ?? '').trim() || 'Cobro aplicado desde Panel Diario.',
+      sourceType: 'daily-panel',
+      sourceMovementId: movementId,
+      linkedDailyPanelDateKey: safeDateKey,
+    })
+
+    return {
+      ok: true,
+      paymentId,
+      orderId,
+      appliedAmount: payableAmount,
+      wasCapped: payableAmount < amount,
+      cappedAmount: amount - payableAmount,
+      remainingDebtBeforeApply: remainingDebt,
+    }
+  }, [orders, registerPayment])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.localStorage) return undefined
@@ -286,8 +440,36 @@ function App() {
     if (!isSupabaseConfigured) return
     if (window.navigator.onLine === false) return
 
-    const sessionGuardKey = 'packya_cloud_review_done_v1'
-    if (window.sessionStorage.getItem(sessionGuardKey) === '1') return
+    const reviewSignatureKey = 'packya_cloud_review_signature_v2'
+    const reviewSnoozeUntilKey = 'packya_cloud_review_snooze_until_v1'
+
+    const snoozedUntil = Number(window.localStorage.getItem(reviewSnoozeUntilKey) ?? 0)
+    if (Number.isFinite(snoozedUntil) && snoozedUntil > Date.now()) {
+      return
+    }
+
+    const buildDiffSignature = (report) => {
+      const safeDiffs = Array.isArray(report?.differences) ? report.differences : []
+      if (safeDiffs.length === 0) return 'in-sync'
+
+      const serialized = safeDiffs
+        .map((diff) => {
+          const entity = String(diff?.entity ?? '')
+          const localCount = Number(diff?.localCount ?? 0)
+          const cloudCount = Number(diff?.cloudCount ?? 0)
+          const reason = String(diff?.reason ?? '')
+          return `${entity}|${localCount}|${cloudCount}|${reason}`
+        })
+        .sort((a, b) => a.localeCompare(b))
+
+      return serialized.join('||')
+    }
+
+    const setCloudReviewSnooze = (minutes = 20) => {
+      const clamped = Math.max(5, Number(minutes || 0))
+      const until = Date.now() + clamped * 60 * 1000
+      window.localStorage.setItem(reviewSnoozeUntilKey, String(until))
+    }
 
     let cancelled = false
 
@@ -296,8 +478,15 @@ function App() {
         const report = await buildCloudLocalDiffReport()
         if (cancelled) return
 
+        const currentSignature = buildDiffSignature(report)
+        const lastReviewedSignature = String(window.localStorage.getItem(reviewSignatureKey) ?? '')
+
+        if (lastReviewedSignature && lastReviewedSignature === currentSignature) {
+          return
+        }
+
         if (!report.hasDifferences) {
-          window.sessionStorage.setItem(sessionGuardKey, '1')
+          window.localStorage.setItem(reviewSignatureKey, currentSignature)
           return
         }
 
@@ -327,7 +516,8 @@ function App() {
             applyCloudPayloadToLocal(diff.entity, diff.cloudPayload)
           })
 
-          window.sessionStorage.setItem(sessionGuardKey, '1')
+          window.localStorage.setItem(reviewSignatureKey, currentSignature)
+          setCloudReviewSnooze(30)
           window.alert('Se aplicaron los cambios de Nube sobre Local. La app se recargará para actualizar todo.')
           window.location.reload()
           return
@@ -339,14 +529,28 @@ function App() {
         if (cancelled) return
 
         if (keepLocalAndUpload) {
-          for (const diff of report.differences) {
+          const writableDiffs = report.differences.filter((diff) => isCloudEntityWriteAllowed(diff.entity))
+
+          if (writableDiffs.length === 0) {
+            window.alert(
+              `No hay entidades permitidas para subir en etapa 1. Permitidas: ${CLOUD_WRITE_ALLOWLIST.join(', ')}.`,
+            )
+            window.localStorage.setItem(reviewSignatureKey, currentSignature)
+            return
+          }
+
+          for (const diff of writableDiffs) {
             await forceUpsertCloudSnapshot(diff.entity, diff.localPayload ?? [])
           }
 
-          window.alert('Sincronización completada: se mantuvo Local y se actualizó Nube con esos datos.')
+          window.alert(
+            `Sincronización completada para entidades permitidas (${CLOUD_WRITE_ALLOWLIST.join(', ')}). ` +
+            'Se mantuvo Local y se actualizó Nube con esos datos.',
+          )
         }
 
-        window.sessionStorage.setItem(sessionGuardKey, '1')
+        window.localStorage.setItem(reviewSignatureKey, currentSignature)
+        setCloudReviewSnooze(20)
       } catch (error) {
         console.warn('[cloud-review] No se pudo completar la revisión de diferencias:', error)
       }
@@ -634,6 +838,8 @@ function App() {
               onCloseSaveToast={() => setSaveToastVisible(false)}
               globalAlerts={globalAlerts}
               onOpenAlert={handleOpenGlobalAlert}
+              session={session}
+              onSignOut={signOut}
             />
           }
         >
@@ -647,6 +853,22 @@ function App() {
                 clients={clients}
                 purchases={purchases}
                 expenses={expenses}
+              />
+            }
+          />
+          <Route
+            path="/panel-diario"
+            element={
+              <DailyPanelPage
+                dailyPanelEntries={dailyPanelEntries}
+                getDailyPanelEntry={getDailyPanelEntry}
+                upsertDailyPanelEntry={upsertDailyPanelEntry}
+                orders={orders}
+                purchases={purchases}
+                expenses={expenses}
+                suppliers={suppliers}
+                onSaveSupplier={upsertSupplier}
+                onApplyLinkedIncomeToOrder={applyDailyPanelIncomeToOrderPayment}
               />
             }
           />
@@ -786,7 +1008,15 @@ function App() {
             }
           />
           <Route path="/base-datos" element={<DatabaseStatusPage />} />
-          <Route path="/configuracion" element={<SettingsPage />} />
+          <Route
+            path="/configuracion"
+            element={
+              <SettingsPage
+                onRestoreOrdersSafetySnapshot={restoreLastOrdersSafetySnapshot}
+                getOrdersSafetySnapshotMeta={getLastOrdersSafetySnapshotMeta}
+              />
+            }
+          />
           <Route
             path="/stock"
             element={
